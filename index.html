@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a1d24">
+<link rel="manifest" href="manifest.json">
+<title>背书</title>
+<style>
+  :root {
+    --bg: #f7f6f3; --card: #ffffff; --ink: #24292f; --muted: #6b7280;
+    --accent: #b5541c; --accent-soft: #f6e3d7; --line: #e5e2dc;
+    --ok: #2f7d4f; --rec: #c03434;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1d24; --card: #242833; --ink: #e6e4df; --muted: #9aa1ad;
+      --accent: #e08a4e; --accent-soft: #3a2e25; --line: #343a47;
+      --ok: #5cb884; --rec: #e06767;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Songti SC", "Noto Serif SC", Georgia, serif;
+    font-size: 17px; line-height: 1.6;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px 10px; position: sticky; top: 0; background: var(--bg); z-index: 5;
+  }
+  header h1 { font-size: 20px; margin: 0; flex: 1; font-weight: 600; }
+  .back { border: none; background: none; color: var(--accent); font-size: 17px; padding: 4px 8px 4px 0; cursor: pointer; font-family: inherit; }
+  main { padding: 0 16px 90px; max-width: 640px; margin: 0 auto; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  button.primary {
+    background: var(--accent); color: #fff; border: none; border-radius: 10px;
+    padding: 12px 18px; font-size: 17px; font-family: inherit; cursor: pointer; width: 100%;
+  }
+  button.ghost {
+    background: none; border: 1px solid var(--line); color: var(--ink); border-radius: 10px;
+    padding: 8px 14px; font-size: 15px; font-family: inherit; cursor: pointer;
+  }
+  button:disabled { opacity: .45; }
+  button.ghost.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .text-item { cursor: pointer; }
+  .text-item h3 { margin: 0 0 4px; font-size: 18px; }
+  .text-item .meta { color: var(--muted); font-size: 13px; }
+  textarea, input[type=text] {
+    width: 100%; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    font-size: 16px; font-family: inherit; line-height: 1.7;
+  }
+  textarea { min-height: 200px; }
+  label { display: block; color: var(--muted); font-size: 14px; margin: 12px 0 6px; }
+  /* 句列表 */
+  .sent {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 10px 12px; border-radius: 10px; cursor: pointer; margin-bottom: 4px;
+  }
+  .sent .idx { color: var(--muted); font-size: 13px; min-width: 1.8em; padding-top: 3px; }
+  .sent .txt { flex: 1; }
+  .sent .mark { font-size: 13px; padding-top: 3px; }
+  .sent.playing { background: var(--accent-soft); }
+  .sent.norec .txt { color: var(--muted); }
+  .sent .mark.selmark { color: var(--accent); }
+  .rec-list { width: 100%; padding: 10px 8px; }
+  .rec-list .sent { padding: 6px 10px; margin-bottom: 2px; }
+  /* 播放条 */
+  #playbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    background: var(--card); border-top: 1px solid var(--line);
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  }
+  #playbar .row { display: flex; align-items: center; justify-content: center; gap: 14px; max-width: 640px; margin: 0 auto; }
+  #playbar button {
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+    border-radius: 50%; width: 46px; height: 46px; font-size: 19px; cursor: pointer;
+  }
+  #playbar button.big { width: 58px; height: 58px; font-size: 24px; background: var(--accent); color: #fff; border: none; }
+  #playbar button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  #playbar .opts { display: flex; justify-content: center; gap: 10px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  #playbar select {
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 3px 6px; font-size: 13px; font-family: inherit;
+  }
+  /* 录音页 */
+  .rec-current {
+    font-size: 22px; line-height: 1.8; text-align: center; padding: 26px 10px; min-height: 120px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .rec-controls { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  #recBtn {
+    width: 84px; height: 84px; border-radius: 50%; border: 4px solid var(--rec);
+    background: var(--card); cursor: pointer; position: relative;
+  }
+  #recBtn .dot {
+    position: absolute; inset: 18px; border-radius: 50%; background: var(--rec);
+    transition: border-radius .15s, inset .15s;
+  }
+  #recBtn.recording .dot { inset: 26px; border-radius: 6px; }
+  .rec-nav { display: flex; gap: 10px; width: 100%; }
+  .rec-nav button { flex: 1; }
+  .hint { color: var(--muted); font-size: 14px; text-align: center; }
+  .switch { display: flex; align-items: center; gap: 8px; justify-content: center; color: var(--muted); font-size: 14px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .toolbar button { flex: 1; }
+  .danger { color: var(--rec); }
+  #toast {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: var(--bg); padding: 8px 18px; border-radius: 20px;
+    font-size: 14px; z-index: 99; opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<header>
+  <button class="back" id="backBtn" style="display:none">‹ 返回</button>
+  <h1 id="pageTitle">背书</h1>
+  <button class="ghost" id="headerAction" style="display:none"></button>
+</header>
+<main id="main"></main>
+<div id="playbar" style="display:none">
+  <div class="row">
+    <button id="prevBtn" title="上一句">⏮</button>
+    <button id="loopBtn" title="单句循环">🔁</button>
+    <button id="playBtn" class="big" title="播放/暂停">▶</button>
+    <button id="contBtn" title="连播">⏩</button>
+    <button id="nextBtn" title="下一句">⏭</button>
+  </div>
+  <div class="opts">
+    <span>语速 <select id="rateSel">
+      <option value="0.75">0.75×</option>
+      <option value="1" selected>1×</option>
+      <option value="1.25">1.25×</option>
+      <option value="1.5">1.5×</option>
+    </select></span>
+    <span>句间留白 <select id="gapSel">
+      <option value="0" selected>0秒</option>
+      <option value="1">1秒</option>
+      <option value="2">2秒</option>
+      <option value="3">3秒</option>
+    </select></span>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+/* ---------- IndexedDB ---------- */
+const DB_NAME = 'beishu', DB_VER = 1;
+let db;
+function openDB() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains('texts')) d.createObjectStore('texts', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('audios')) d.createObjectStore('audios', { keyPath: 'key' });
+    };
+    req.onsuccess = () => { db = req.result; res(); };
+    req.onerror = () => rej(req.error);
+  });
+}
+function tx(store, mode, fn) {
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode), s = t.objectStore(store);
+    const out = fn(s);
+    t.oncomplete = () => res(out && out.result !== undefined ? out.result : undefined);
+    t.onerror = () => rej(t.error);
+  });
+}
+const putText = t => tx('texts', 'readwrite', s => s.put(t));
+const delText = id => tx('texts', 'readwrite', s => s.delete(id));
+const getAllTexts = () => new Promise((res, rej) => {
+  const req = db.transaction('texts').objectStore('texts').getAll();
+  req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+});
+const getText = id => new Promise((res, rej) => {
+  const req = db.transaction('texts').objectStore('texts').get(id);
+  req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+});
+const putAudio = (key, blob, mime) => tx('audios', 'readwrite', s => s.put({ key, blob, mime }));
+const delAudio = key => tx('audios', 'readwrite', s => s.delete(key));
+const getAudio = key => new Promise((res, rej) => {
+  const req = db.transaction('audios').objectStore('audios').get(key);
+  req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+});
+
+/* ---------- 状态 ---------- */
+let view = 'home';          // home | edit | detail | record
+let curText = null;         // 当前篇
+let recState = { idx: 0, recording: false, autoNext: true };
+let selMode = false, selSet = new Set(), selTextId = null; // 选句连播
+let player = {
+  idx: -1, playing: false, loop: false, continuous: false,
+  audio: new Audio(), url: null, gapTimer: null
+};
+player.audio.addEventListener('ended', onEnded);
+
+const $ = sel => document.querySelector(sel);
+const main = $('#main');
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.style.opacity = 1;
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.opacity = 0, 1600);
+}
+const audioKey = (textId, i) => `${textId}:${i}`;
+
+/* ---------- 艾宾浩斯 ---------- */
+const DAY = 86400000;
+const STEPS = [0, 1, 2, 4, 7, 15, 30]; // 间隔天数阶梯
+const todayTs = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const fmtStep = s => s === 0 ? '当天' : STEPS[s] + '天';
+function fmtDue(due) {
+  const dd = Math.round((due - todayTs()) / DAY);
+  return dd <= 0 ? '今天' : dd === 1 ? '明天' : dd + ' 天后';
+}
+function cardLabel(t, c) {
+  const cards = t.srsCards || [];
+  if (cards.length <= 1) return '整篇';
+  return `段${cards.indexOf(c) + 1}（句${c.from + 1}–${c.to + 1}）`;
+}
+
+/* ---------- 分句 ---------- */
+function splitSentences(raw) {
+  const out = [];
+  for (const line of raw.split(/\n+/)) {
+    let buf = '';
+    for (const ch of line.trim()) {
+      buf += ch;
+      if ('。！？；!?;'.includes(ch)) { if (buf.trim()) out.push(buf.trim()); buf = ''; }
+    }
+    if (buf.trim()) out.push(buf.trim());
+  }
+  return out;
+}
+
+/* ---------- 视图 ---------- */
+function setHeader(title, backTo, action) {
+  $('#pageTitle').textContent = title;
+  const b = $('#backBtn');
+  b.style.display = backTo ? '' : 'none';
+  b.onclick = backTo || null;
+  const a = $('#headerAction');
+  if (action) { a.style.display = ''; a.textContent = action.label; a.onclick = action.fn; }
+  else a.style.display = 'none';
+}
+
+async function renderHome() {
+  view = 'home'; stopAll(); $('#playbar').style.display = 'none';
+  setHeader('背书', null, { label: '＋ 新建', fn: () => renderEdit(null) });
+  const texts = (await getAllTexts()).sort((a, b) => b.updated - a.updated);
+  main.innerHTML = '';
+  if (!texts.length) {
+    main.innerHTML = '<div class="card"><p>还没有篇目。</p><p class="hint">点右上角「＋ 新建」，粘贴要背的古文，自动分句后逐句录音，就可以开始背了。</p></div>';
+    return;
+  }
+  const t0 = todayTs();
+  const due = [];
+  for (const t of texts) for (const c of (t.srsCards || [])) if (c.due <= t0) due.push({ t, c });
+  if (due.length) {
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = `<h3 style="margin:0 0 6px">📅 今日复习（${due.length}）</h3><div class="hint" style="text-align:left;margin-bottom:6px">点一项开始测验复习：</div>`;
+    for (const { t, c } of due) {
+      const row = document.createElement('div');
+      row.className = 'sent';
+      row.innerHTML = `<span class="txt"></span><span class="mark"></span>`;
+      row.querySelector('.txt').textContent = `${t.title} · ${cardLabel(t, c)}`;
+      row.querySelector('.mark').textContent = `阶梯 ${fmtStep(c.step)}`;
+      row.onclick = () => startReview(t.id, c.id);
+      d.appendChild(row);
+    }
+    main.appendChild(d);
+  }
+  for (const t of texts) {
+    const done = t.recorded ? Object.keys(t.recorded).length : 0;
+    const plan = (t.srsCards && t.srsCards.length)
+      ? ` · 复习：${fmtDue(Math.min(...t.srsCards.map(c => c.due)))}` : '';
+    const el = document.createElement('div');
+    el.className = 'card text-item';
+    el.innerHTML = `<h3></h3><div class="meta">${t.sentences.length} 句 · 已录 ${done} 句${plan}</div>`;
+    el.querySelector('h3').textContent = t.title;
+    el.onclick = () => renderDetail(t.id);
+    main.appendChild(el);
+  }
+}
+
+function renderEdit(existing) {
+  view = 'edit'; $('#playbar').style.display = 'none';
+  setHeader(existing ? '编辑篇目' : '新建篇目', () => existing ? renderDetail(existing.id) : renderHome());
+  main.innerHTML = `
+    <label>标题</label>
+    <input type="text" id="titleIn" placeholder="如：玉命金言·财诀">
+    <label>正文（自动按 。！？； 和换行分句；下一步可手工调整）</label>
+    <textarea id="bodyIn" placeholder="粘贴原文……"></textarea>
+    <div style="margin-top:14px"><button class="primary" id="nextStep">下一步：确认分句</button></div>`;
+  if (existing) {
+    $('#titleIn').value = existing.title;
+    $('#bodyIn').value = existing.sentences.join('\n');
+  }
+  $('#nextStep').onclick = () => {
+    const title = $('#titleIn').value.trim();
+    const raw = $('#bodyIn').value;
+    if (!title || !raw.trim()) return toast('标题和正文都要填');
+    const sents = existing ? raw.split(/\n/).map(s => s.trim()).filter(Boolean) : splitSentences(raw);
+    renderConfirm(existing, title, sents);
+  };
+}
+
+function renderConfirm(existing, title, sents) {
+  setHeader('确认分句', () => renderEdit(existing));
+  main.innerHTML = `
+    <p class="hint">一行一句。可合并、拆分、改错字；确认后保存。${existing ? '注意：已录音频按句序号对应，调整句序会导致错位。' : ''}</p>
+    <textarea id="sentsIn" style="min-height:300px"></textarea>
+    <div style="margin-top:14px"><button class="primary" id="saveBtn">保存</button></div>`;
+  $('#sentsIn').value = sents.join('\n');
+  $('#saveBtn').onclick = async () => {
+    const finalSents = $('#sentsIn').value.split(/\n/).map(s => s.trim()).filter(Boolean);
+    if (!finalSents.length) return toast('至少一句');
+    const t = existing || { id: Date.now().toString(36), created: Date.now(), recorded: {} };
+    t.title = title; t.sentences = finalSents; t.updated = Date.now();
+    await putText(t);
+    toast('已保存');
+    renderDetail(t.id);
+  };
+}
+
+async function renderDetail(id) {
+  view = 'detail';
+  curText = await getText(id);
+  if (!curText) return renderHome();
+  stopAll();
+  if (selTextId !== curText.id) { selSet = new Set(); selTextId = curText.id; }
+  selMode = false;
+  setHeader(curText.title, renderHome, { label: '编辑', fn: () => renderEdit(curText) });
+  const done = curText.recorded ? Object.keys(curText.recorded).length : 0;
+  main.innerHTML = `
+    <div class="toolbar">
+      <button class="ghost" id="goRecord">🎙 录音（${done}/${curText.sentences.length}）</button>
+      <button class="ghost" id="goQuiz">🧠 测验</button>
+      <button class="ghost" id="selBtn">☑ 选句</button>
+      <button class="ghost" id="exportBtn">⬇ 导出</button>
+      <button class="ghost danger" id="delBtn">删除</button>
+    </div>
+    ${curText.lastQuiz ? `<div class="hint" style="text-align:left;margin-bottom:8px">上次测验：对 ${curText.lastQuiz.right} / ${curText.lastQuiz.total}${curText.lastQuiz.wrongIdx.length ? '，错句：' + curText.lastQuiz.wrongIdx.map(i => i + 1).join('、') : ''}</div>` : ''}
+    <div class="hint" id="selHint" style="display:none;text-align:left;margin-bottom:10px">
+      点句勾选/取消，连播和上下句只在所选句里走；一句不选 = 播全篇。
+      <button class="ghost" id="selAll" style="padding:2px 10px;font-size:13px">全选</button>
+      <button class="ghost" id="selNone" style="padding:2px 10px;font-size:13px">清空</button>
+    </div>
+    <div class="card" id="planCard"></div>
+    <div id="sentList"></div>`;
+  $('#goRecord').onclick = () => renderRecord(0);
+  $('#goQuiz').onclick = () => renderQuiz();
+  $('#exportBtn').onclick = () => exportAudio();
+  renderPlanCard();
+  $('#selBtn').onclick = () => {
+    selMode = !selMode;
+    $('#selBtn').classList.toggle('on', selMode);
+    $('#selHint').style.display = selMode ? '' : 'none';
+    refreshMarks();
+  };
+  $('#selAll').onclick = () => { curText.sentences.forEach((_, i) => selSet.add(i)); refreshMarks(); };
+  $('#selNone').onclick = () => { selSet.clear(); refreshMarks(); };
+  $('#delBtn').onclick = async () => {
+    if (!confirm(`删除「${curText.title}」及其全部录音？`)) return;
+    for (let i = 0; i < curText.sentences.length; i++) await delAudio(audioKey(curText.id, i));
+    await delText(curText.id);
+    renderHome();
+  };
+  const list = $('#sentList');
+  curText.sentences.forEach((s, i) => {
+    const has = curText.recorded && curText.recorded[i];
+    const el = document.createElement('div');
+    el.className = 'sent' + (has ? '' : ' norec');
+    el.dataset.idx = i;
+    el.innerHTML = `<span class="idx">${i + 1}</span><span class="txt"></span><span class="mark"></span>`;
+    el.querySelector('.txt').textContent = s;
+    el.onclick = () => {
+      if (selMode) {
+        selSet.has(i) ? selSet.delete(i) : selSet.add(i);
+        refreshMarks();
+        return;
+      }
+      playIdx(i, { userTap: true });
+    };
+    list.appendChild(el);
+  });
+  refreshMarks();
+  $('#playbar').style.display = '';
+  updatePlaybar();
+}
+function refreshMarks() {
+  document.querySelectorAll('#sentList .sent').forEach(el => {
+    const i = +el.dataset.idx;
+    const has = curText.recorded && curText.recorded[i];
+    const mark = el.querySelector('.mark');
+    if (selMode) mark.textContent = selSet.has(i) ? '☑' : '☐';
+    else mark.textContent = selSet.has(i) ? '☑' : (has ? '' : '未录');
+    mark.classList.toggle('selmark', selSet.has(i));
+  });
+}
+
+/* ---------- 录音 ---------- */
+let mediaStream = null, recorder = null, chunks = [];
+const MIME_CANDIDATES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+function pickMime() {
+  if (!window.MediaRecorder) return null;
+  for (const m of MIME_CANDIDATES) if (MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+}
+
+async function renderRecord(startIdx) {
+  view = 'record'; stopAll(); $('#playbar').style.display = 'none';
+  recState.idx = startIdx;
+  // 跳到第一个未录的句子
+  if (curText.recorded) {
+    while (recState.idx < curText.sentences.length && curText.recorded[recState.idx]) recState.idx++;
+    if (recState.idx >= curText.sentences.length) recState.idx = startIdx; // 全录完则从头
+  }
+  setHeader('逐句录音', () => renderDetail(curText.id));
+  main.innerHTML = `
+    <div class="card"><div class="rec-current" id="recSent"></div></div>
+    <div class="rec-controls">
+      <div class="hint" id="recStatus"></div>
+      <button id="recBtn"><div class="dot"></div></button>
+      <button class="ghost" id="recRedo" style="display:none">🔄 录错了，作废重录</button>
+      <div class="switch"><input type="checkbox" id="autoNext" ${recState.autoNext ? 'checked' : ''}><label for="autoNext" style="margin:0">录完自动跳下一句</label></div>
+      <div class="rec-nav">
+        <button class="ghost" id="recPrev">上一句</button>
+        <button class="ghost" id="recPlay">试听本句</button>
+        <button class="ghost" id="recNext">下一句</button>
+      </div>
+      <div class="rec-nav">
+        <button class="ghost" id="recBack">↩ 重录上一句</button>
+      </div>
+      <div class="card rec-list" id="recList"></div>
+      <button class="ghost" id="goBulk" style="width:100%">🎬 整篇录制 · 打点切分</button>
+    </div>`;
+  $('#autoNext').onchange = e => recState.autoNext = e.target.checked;
+  $('#goBulk').onclick = () => {
+    if (recState.recording) return toast('录音中，先停止');
+    renderBulkRecord();
+  };
+  $('#recBtn').onclick = toggleRecord;
+  $('#recRedo').onclick = () => {
+    if (!recState.recording) return;
+    discardTake = true;
+    recorder.stop();
+  };
+  $('#recBack').onclick = () => {
+    if (recState.recording || recState.idx <= 0) return;
+    recState.idx--;
+    updateRecView();
+    startRec();
+  };
+  $('#recPrev').onclick = () => moveRec(-1);
+  $('#recNext').onclick = () => moveRec(1);
+  $('#recPlay').onclick = async () => {
+    const a = await getAudio(audioKey(curText.id, recState.idx));
+    if (!a) return toast('本句还没录');
+    playBlob(a.blob);
+  };
+  const list = $('#recList');
+  list.innerHTML = '<div class="hint" style="text-align:left;margin-bottom:6px">点任意句，直接跳到该句（重）录：</div>';
+  curText.sentences.forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = 'sent';
+    el.dataset.idx = i;
+    el.innerHTML = `<span class="idx">${i + 1}</span><span class="txt"></span><span class="mark"></span>`;
+    el.querySelector('.txt').textContent = s;
+    el.onclick = () => {
+      if (recState.recording) return toast('录音中，先停止或作废');
+      recState.idx = i;
+      updateRecView();
+    };
+    list.appendChild(el);
+  });
+  updateRecView();
+}
+function moveRec(d) {
+  if (recState.recording) return toast('录音中，先停止或作废');
+  const n = recState.idx + d;
+  if (n < 0 || n >= curText.sentences.length) return;
+  recState.idx = n; updateRecView();
+}
+function updateRecView() {
+  $('#recSent').textContent = curText.sentences[recState.idx];
+  const has = curText.recorded && curText.recorded[recState.idx];
+  $('#recStatus').textContent =
+    `第 ${recState.idx + 1} / ${curText.sentences.length} 句 · ${has ? '已录（再录将覆盖）' : '未录'}${recState.recording ? ' · 录音中…' : ''}`;
+  $('#recBtn').classList.toggle('recording', recState.recording);
+  $('#recRedo').style.display = recState.recording ? '' : 'none';
+  $('#recBack').disabled = recState.recording || recState.idx <= 0;
+  document.querySelectorAll('#recList .sent').forEach(el => {
+    const i = +el.dataset.idx;
+    const rec = curText.recorded && curText.recorded[i];
+    el.classList.toggle('norec', !rec);
+    el.classList.toggle('playing', i === recState.idx);
+    el.querySelector('.mark').textContent = rec ? '✓' : '未录';
+  });
+}
+let discardTake = false;
+function toggleRecord() {
+  if (recState.recording) { discardTake = false; recorder.stop(); return; }
+  startRec();
+}
+async function startRec() {
+  try {
+    if (!mediaStream) mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) { return toast('无法访问麦克风：' + e.message); }
+  const mime = pickMime();
+  if (mime === null) return toast('此浏览器不支持录音');
+  chunks = [];
+  recorder = new MediaRecorder(mediaStream, mime ? { mimeType: mime } : undefined);
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = async () => {
+    recState.recording = false;
+    if (discardTake) {
+      discardTake = false;
+      toast('已作废，重新录这一句');
+      startRec();
+      return;
+    }
+    const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+    const i = recState.idx;
+    await putAudio(audioKey(curText.id, i), blob, blob.type);
+    curText.recorded = curText.recorded || {};
+    curText.recorded[i] = true;
+    curText.updated = Date.now();
+    await putText(curText);
+    toast(`第 ${i + 1} 句已保存`);
+    if (recState.autoNext && i < curText.sentences.length - 1) recState.idx = i + 1;
+    updateRecView();
+  };
+  recorder.start();
+  recState.recording = true;
+  updateRecView();
+}
+
+/* ---------- 音频工具（解码 / WAV 编码） ---------- */
+let audioCtx = null;
+const getCtx = () => audioCtx || (audioCtx = new (window.AudioContext || window.webkitAudioContext)());
+async function decodeBlob(blob) {
+  const ab = await blob.arrayBuffer();
+  return await getCtx().decodeAudioData(ab);
+}
+function wavBlob(samples, rate) {
+  const len = samples.length;
+  const buf = new ArrayBuffer(44 + len * 2);
+  const v = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, 36 + len * 2, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, len * 2, true);
+  for (let i = 0; i < len; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+/* ---------- 导出合并音频 ---------- */
+async function exportAudio() {
+  const idxs = [];
+  for (let i = 0; i < curText.sentences.length; i++)
+    if (curText.recorded && curText.recorded[i]) idxs.push(i);
+  if (!idxs.length) return toast('还没有录音，无法导出');
+  toast('合成中…');
+  const decoded = [];
+  for (const i of idxs) {
+    const a = await getAudio(audioKey(curText.id, i));
+    decoded.push(await decodeBlob(a.blob));
+  }
+  const rate = getCtx().sampleRate;
+  const gapLen = Math.round(parseFloat($('#gapSel').value) * rate);
+  const total = decoded.reduce((s, b) => s + b.length, 0) + gapLen * (decoded.length - 1);
+  const out = new Float32Array(total);
+  let off = 0;
+  decoded.forEach((b, k) => {
+    out.set(b.getChannelData(0), off);
+    off += b.length + (k < decoded.length - 1 ? gapLen : 0);
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(wavBlob(out, rate));
+  a.download = curText.title + '.wav';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  toast(`已导出 WAV（${idxs.length} 句，含当前句间留白）`);
+}
+
+/* ---------- 整篇录制 · 打点切分 ---------- */
+let bulk = { blob: null, marks: [] };
+let bulkRec = null;
+function renderBulkRecord() {
+  view = 'bulk'; stopAll(); $('#playbar').style.display = 'none';
+  setHeader('整篇录制', () => renderRecord(0));
+  main.innerHTML = `
+    <p class="hint" style="text-align:left">对照全文一口气读完整篇；录完后逐句打点切分，切出的句子会覆盖对应句的录音。</p>
+    <div class="card" id="bulkText" style="line-height:2"></div>
+    <div class="rec-controls">
+      <div class="hint" id="bulkStatus">点红钮开始录整篇</div>
+      <button id="recBtn"><div class="dot"></div></button>
+    </div>`;
+  const bt = $('#bulkText');
+  curText.sentences.forEach(s => {
+    const sp = document.createElement('span');
+    sp.textContent = s;
+    bt.appendChild(sp);
+  });
+  $('#recBtn').onclick = async () => {
+    if (bulkRec) { bulkRec.stop(); return; }
+    try {
+      if (!mediaStream) mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) { return toast('无法访问麦克风：' + e.message); }
+    const mime = pickMime();
+    if (mime === null) return toast('此浏览器不支持录音');
+    const cks = [];
+    bulkRec = new MediaRecorder(mediaStream, mime ? { mimeType: mime } : undefined);
+    bulkRec.ondataavailable = e => { if (e.data.size) cks.push(e.data); };
+    bulkRec.onstop = () => {
+      bulk.blob = new Blob(cks, { type: bulkRec.mimeType || 'audio/webm' });
+      bulkRec = null;
+      renderMarkCut();
+    };
+    bulkRec.start();
+    $('#recBtn').classList.add('recording');
+    $('#bulkStatus').textContent = '录音中…读完整篇后再点一下停止';
+  };
+}
+const fmtTime = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}.${Math.floor((t % 1) * 10)}`;
+function renderMarkCut() {
+  view = 'cut';
+  setHeader('打点切分', () => renderBulkRecord());
+  const n = curText.sentences.length;
+  bulk.marks = [];
+  main.innerHTML = `
+    <p class="hint" style="text-align:left">播放录音，每读完一句就点一次「✂ 打点」，共需 ${n - 1} 个点（最后一句到结尾自动截）。可拖进度条回听，点错了「撤销」。</p>
+    <audio id="cutAudio" controls style="width:100%"></audio>
+    <div class="rec-nav" style="margin:12px 0">
+      <button class="primary" id="markBtn" style="flex:2">✂ 打点</button>
+      <button class="ghost" id="undoBtn" style="flex:1">撤销</button>
+    </div>
+    <div class="hint" id="cutStatus" style="text-align:left"></div>
+    <div id="cutList"></div>
+    <div style="margin:14px 0"><button class="primary" id="cutSave" disabled>完成切分并保存</button></div>`;
+  const audio = $('#cutAudio');
+  audio.src = URL.createObjectURL(bulk.blob);
+  const update = () => {
+    $('#cutStatus').textContent = `已打 ${bulk.marks.length} / ${n - 1} 个点`;
+    const cl = $('#cutList');
+    cl.innerHTML = '';
+    bulk.marks.forEach((t, k) => {
+      const el = document.createElement('div');
+      el.className = 'sent';
+      el.innerHTML = `<span class="idx">${k + 1}</span><span class="txt"></span><span class="mark">止于 ${fmtTime(t)}</span>`;
+      el.querySelector('.txt').textContent = curText.sentences[k];
+      cl.appendChild(el);
+    });
+    $('#cutSave').disabled = bulk.marks.length !== n - 1;
+  };
+  $('#markBtn').onclick = () => {
+    const t = audio.currentTime;
+    if (bulk.marks.length >= n - 1) return toast('点够了，可以完成切分');
+    if (bulk.marks.length && t <= bulk.marks[bulk.marks.length - 1] + 0.05) return toast('打点要按顺序往后');
+    bulk.marks.push(t);
+    update();
+  };
+  $('#undoBtn').onclick = () => { bulk.marks.pop(); update(); };
+  $('#cutSave').onclick = async () => {
+    $('#cutSave').disabled = true;
+    toast('切分中…');
+    audio.pause();
+    const buf = await decodeBlob(bulk.blob);
+    const ch = buf.getChannelData(0);
+    const bounds = [0, ...bulk.marks.map(t => Math.min(ch.length, Math.round(t * buf.sampleRate))), ch.length];
+    curText.recorded = curText.recorded || {};
+    for (let i = 0; i < n; i++) {
+      const blob = wavBlob(ch.slice(bounds[i], bounds[i + 1]), buf.sampleRate);
+      await putAudio(audioKey(curText.id, i), blob, 'audio/wav');
+      curText.recorded[i] = true;
+    }
+    curText.updated = Date.now();
+    await putText(curText);
+    URL.revokeObjectURL(audio.src);
+    toast(`已切成 ${n} 句并保存`);
+    renderDetail(curText.id);
+  };
+  update();
+}
+
+/* ---------- 背诵计划 ---------- */
+function renderPlanCard() {
+  const pc = $('#planCard');
+  const cards = curText.srsCards || [];
+  if (!cards.length) {
+    pc.innerHTML = `
+      <div class="hint" style="text-align:left">还没开启背诵计划。开启后按艾宾浩斯间隔（当天→1→2→4→7→15→30 天）安排测验复习；长篇可分段，每段独立排期。</div>
+      <button class="ghost" id="planStart" style="margin-top:10px">📅 开始背诵计划</button>`;
+    $('#planStart').onclick = () => renderPlanSetup();
+    return;
+  }
+  pc.innerHTML = `
+    <div class="hint" style="text-align:left;margin-bottom:4px">背诵计划（到期不到期都可以点「复习」）：</div>
+    <div id="planRows"></div>
+    <button class="ghost danger" id="planCancel" style="margin-top:8px;font-size:13px;padding:4px 10px">取消计划</button>`;
+  const rows = $('#planRows');
+  cards.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'sent';
+    row.style.cursor = 'default';
+    row.innerHTML = `<span class="txt"></span><span class="mark"></span><button class="ghost" style="padding:4px 12px;font-size:14px">复习</button>`;
+    row.querySelector('.txt').textContent = `${cardLabel(curText, c)} · 阶梯 ${fmtStep(c.step)}`;
+    row.querySelector('.mark').textContent = `下次：${fmtDue(c.due)}`;
+    row.querySelector('button').onclick = () => startReview(curText.id, c.id);
+    rows.appendChild(row);
+  });
+  $('#planCancel').onclick = async () => {
+    if (!confirm('取消背诵计划？复习进度将清除（文本和录音不受影响）。')) return;
+    delete curText.srsCards;
+    curText.updated = Date.now();
+    await putText(curText);
+    renderDetail(curText.id);
+  };
+}
+function renderPlanSetup() {
+  view = 'plan'; stopAll(); $('#playbar').style.display = 'none';
+  setHeader('背诵计划 · 分段', () => renderDetail(curText.id));
+  const breaks = new Set();
+  main.innerHTML = `
+    <p class="hint" style="text-align:left">整篇一起背，直接点「保存计划」。长篇想分段背，点某一句，在它后面切一刀（再点取消）；每段独立排期复习。</p>
+    <div id="planList"></div>
+    <div style="margin:14px 0"><button class="primary" id="planSave">保存计划</button></div>`;
+  const list = $('#planList');
+  curText.sentences.forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = 'sent'; el.dataset.idx = i;
+    el.innerHTML = `<span class="idx">${i + 1}</span><span class="txt"></span><span class="mark"></span>`;
+    el.querySelector('.txt').textContent = s;
+    el.onclick = () => {
+      if (i === curText.sentences.length - 1) return;
+      breaks.has(i) ? breaks.delete(i) : breaks.add(i);
+      paint();
+    };
+    list.appendChild(el);
+  });
+  function paint() {
+    document.querySelectorAll('#planList .sent').forEach(el => {
+      const i = +el.dataset.idx;
+      el.querySelector('.mark').textContent = breaks.has(i) ? '✂ 段尾' : '';
+      el.style.borderBottom = breaks.has(i) ? '2px dashed var(--accent)' : '';
+    });
+  }
+  $('#planSave').onclick = async () => {
+    const bs = [...breaks].sort((a, b) => a - b);
+    const ranges = []; let from = 0;
+    for (const b of bs) { ranges.push({ from, to: b }); from = b + 1; }
+    ranges.push({ from, to: curText.sentences.length - 1 });
+    curText.srsCards = ranges.map((r, k) => ({
+      id: 'c' + Date.now().toString(36) + k,
+      from: r.from, to: r.to, step: 0, due: todayTs(), history: []
+    }));
+    curText.updated = Date.now();
+    await putText(curText);
+    toast('计划已建立，今天就可以第一次复习');
+    renderDetail(curText.id);
+  };
+}
+async function startReview(textId, cardId) {
+  curText = await getText(textId);
+  if (!curText) return;
+  const card = (curText.srsCards || []).find(c => c.id === cardId);
+  if (!card) return;
+  const idx = [];
+  for (let i = card.from; i <= Math.min(card.to, curText.sentences.length - 1); i++) idx.push(i);
+  if (!idx.length) return toast('这一段已没有对应句子，请取消计划后重新分段');
+  renderQuiz(idx, cardId);
+}
+async function applyRating(card, rating) {
+  if (rating === 'good') card.step = Math.min(card.step + 1, STEPS.length - 1);
+  else if (rating === 'forgot') card.step = Math.max(0, card.step - 2); // 忘了退两级
+  card.due = todayTs() + STEPS[card.step] * DAY;
+  card.history.push({
+    at: Date.now(), rating,
+    total: quiz.base.length,
+    wrong: quiz.base.filter(i => quiz.results[i] === false).length
+  });
+  curText.updated = Date.now();
+  await putText(curText);
+  quiz.rated = true;
+  showQuizEnd();
+}
+
+/* ---------- 测验 ---------- */
+const quizPrefs = { mode: 'listen', shuffle: false, typing: false };
+function diffChars(a, b) { // LCS 对齐，返回原文各字是否被打中
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+  for (let i = m - 1; i >= 0; i--)
+    for (let j = n - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ok = new Array(m).fill(false);
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { ok[i] = true; i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
+  }
+  return ok;
+}
+function renderDiffInto(el, orig, typed) {
+  const isChar = c => /[\p{L}\p{N}]/u.test(c);
+  const a = [...orig].filter(isChar);
+  const b = [...typed].filter(isChar);
+  const ok = diffChars(a, b);
+  el.innerHTML = '';
+  let k = 0;
+  for (const c of orig) {
+    const sp = document.createElement('span');
+    sp.textContent = c;
+    if (isChar(c)) {
+      if (ok[k]) sp.style.color = 'var(--ok)';
+      else { sp.style.color = 'var(--rec)'; sp.style.textDecoration = 'underline'; }
+      k++;
+    } else sp.style.color = 'var(--muted)';
+    el.appendChild(sp);
+  }
+  const hit = ok.filter(Boolean).length;
+  const info = document.createElement('div');
+  info.className = 'hint';
+  info.style.marginTop = '6px';
+  info.textContent = `打字比对：对 ${hit} / ${a.length} 字${b.length > hit ? `，多打/错打 ${b.length - hit} 字` : ''}`;
+  el.appendChild(info);
+}
+let quiz = null;
+function shuffleArr(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+async function playSentAudio(i) {
+  const a = await getAudio(audioKey(curText.id, i));
+  if (!a) return toast('这一句没有录音');
+  playBlob(a.blob);
+}
+function renderQuiz(indices, reviewCardId) {
+  view = 'quiz'; stopAll(); $('#playbar').style.display = 'none';
+  setHeader(reviewCardId ? '复习测验' : '测验', () => renderDetail(curText.id));
+  main.innerHTML = `
+    <div class="card">
+      <div class="hint" id="quizProg" style="text-align:left"></div>
+      <div class="rec-current" id="quizPrompt"></div>
+      <div class="hint" id="quizHintTxt"></div>
+      <textarea id="quizType" style="display:none;margin-top:8px;min-height:70px" placeholder="在这里打字默写这一句…"></textarea>
+      <div class="rec-current" id="quizAnswer" style="display:none"></div>
+    </div>
+    <div class="rec-controls">
+      <div class="rec-nav">
+        <button class="ghost" id="quizPlay">▶ 放录音</button>
+        <button class="ghost" id="quizHint">提示首字</button>
+      </div>
+      <button class="primary" id="quizReveal">显示答案</button>
+      <div class="rec-nav" id="quizJudge" style="display:none">
+        <button class="ghost" id="quizRight" style="color:var(--ok);border-color:var(--ok)">✓ 记得</button>
+        <button class="ghost danger" id="quizWrong">✗ 忘了</button>
+      </div>
+      <div class="switch">题型 <select id="quizMode">
+        <option value="listen">听写：放自己的录音，默出原文</option>
+        <option value="chain">接句：看上句，背出下一句</option>
+      </select></div>
+      <div class="switch"><input type="checkbox" id="quizShuffle"><label for="quizShuffle" style="margin:0">乱序出题</label></div>
+      <div class="switch"><input type="checkbox" id="quizTyping"><label for="quizTyping" style="margin:0">打字默写（逐字比对）</label></div>
+    </div>`;
+  $('#quizMode').value = quizPrefs.mode;
+  $('#quizShuffle').checked = quizPrefs.shuffle;
+  $('#quizTyping').checked = quizPrefs.typing;
+  $('#quizTyping').onchange = e => {
+    quizPrefs.typing = e.target.checked;
+    $('#quizType').style.display = quizPrefs.typing ? '' : 'none';
+  };
+  $('#quizMode').onchange = e => { quizPrefs.mode = e.target.value; quiz.mode = quizPrefs.mode; showQuizCard(); };
+  $('#quizShuffle').onchange = e => { quizPrefs.shuffle = e.target.checked; startQuizRound(quiz.base, quiz.reviewCardId); };
+  $('#quizPlay').onclick = () => playSentAudio(quiz.order[quiz.pos]);
+  $('#quizHint').onclick = () => {
+    const s = curText.sentences[quiz.order[quiz.pos]];
+    $('#quizHintTxt').textContent = `提示：${s.slice(0, 1)}……（共 ${s.length} 字）`;
+  };
+  $('#quizReveal').onclick = () => {
+    const i = quiz.order[quiz.pos];
+    const typed = quizPrefs.typing ? $('#quizType').value.trim() : '';
+    if (typed) renderDiffInto($('#quizAnswer'), curText.sentences[i], typed);
+    else $('#quizAnswer').textContent = curText.sentences[i];
+    $('#quizAnswer').style.display = '';
+    $('#quizReveal').style.display = 'none';
+    $('#quizJudge').style.display = '';
+    if (curText.recorded && curText.recorded[i]) $('#quizPlay').style.display = '';
+  };
+  $('#quizRight').onclick = () => judgeQuiz(true);
+  $('#quizWrong').onclick = () => judgeQuiz(false);
+  startQuizRound(indices || curText.sentences.map((_, i) => i), reviewCardId || null);
+}
+function startQuizRound(base, reviewCardId) {
+  quiz = {
+    mode: quizPrefs.mode, base: [...base],
+    order: quizPrefs.shuffle ? shuffleArr([...base]) : [...base],
+    pos: 0, results: {},
+    reviewCardId: reviewCardId || null, rated: false, saved: false
+  };
+  showQuizCard();
+}
+function judgeQuiz(ok) {
+  quiz.results[quiz.order[quiz.pos]] = ok;
+  quiz.pos++;
+  showQuizCard();
+}
+function showQuizCard() {
+  const total = quiz.order.length;
+  if (quiz.pos >= total) return showQuizEnd();
+  const i = quiz.order[quiz.pos];
+  const vals = Object.values(quiz.results);
+  $('#quizProg').textContent = `第 ${quiz.pos + 1} / ${total} 题 · 对 ${vals.filter(v => v).length} · 错 ${vals.filter(v => !v).length}`;
+  $('#quizAnswer').style.display = 'none';
+  $('#quizHintTxt').textContent = '';
+  $('#quizType').style.display = quizPrefs.typing ? '' : 'none';
+  $('#quizType').value = '';
+  $('#quizJudge').style.display = 'none';
+  $('#quizReveal').style.display = '';
+  const has = curText.recorded && curText.recorded[i];
+  if (quiz.mode === 'listen') {
+    $('#quizPrompt').textContent = has
+      ? '🔊 点「放录音」，听后默出这一句'
+      : (i === 0 ? '（本句无录音）背出全篇第一句' : '（本句无录音）接上句：' + curText.sentences[i - 1]);
+    $('#quizPlay').style.display = has ? '' : 'none';
+  } else {
+    $('#quizPrompt').textContent = i === 0 ? '背出全篇第一句' : '接上句：' + curText.sentences[i - 1];
+    $('#quizPlay').style.display = 'none'; // 揭晓后再放录音对照
+  }
+}
+async function showQuizEnd() {
+  const wrongIdx = quiz.base.filter(i => quiz.results[i] === false);
+  const right = Object.values(quiz.results).filter(v => v).length;
+  if (!quiz.saved) {
+    quiz.saved = true;
+    curText.lastQuiz = { at: Date.now(), total: quiz.order.length, right, wrongIdx };
+    curText.updated = Date.now();
+    await putText(curText);
+  }
+  const card = quiz.reviewCardId && curText.srsCards
+    ? curText.srsCards.find(c => c.id === quiz.reviewCardId) : null;
+  const needRate = card && !quiz.rated;
+  const errRate = quiz.base.length ? wrongIdx.length / quiz.base.length : 0;
+  const sug = wrongIdx.length === 0 ? 'good' : errRate <= 0.25 ? 'fuzzy' : 'forgot';
+  const sugTag = k => sug === k ? '（建议）' : '';
+  main.innerHTML = `
+    <div class="card" style="text-align:center">
+      <h3 style="margin:4px 0 8px">${card ? '复习完成' : '测验完成'}</h3>
+      <p style="margin:0 0 10px">共 ${quiz.order.length} 题 · 对 ${right} · 错 ${wrongIdx.length}</p>
+      ${wrongIdx.length ? '<div class="hint" style="text-align:left">错句（点句可放录音）：</div>' : '<p>🎉 全对！</p>'}
+      <div id="wrongList" style="text-align:left"></div>
+    </div>
+    ${needRate ? `
+    <div class="card">
+      <div class="hint" style="text-align:left;margin-bottom:8px">这${curText.srsCards.length > 1 ? '一段' : '一篇'}背得怎么样？自评决定下次间隔（已按错误率标出建议）：</div>
+      <div class="rec-nav">
+        <button class="ghost${sug === 'good' ? ' on' : ''}" id="rateGood">记住了${sugTag('good')}</button>
+        <button class="ghost${sug === 'fuzzy' ? ' on' : ''}" id="rateFuzzy">模糊${sugTag('fuzzy')}</button>
+        <button class="ghost${sug === 'forgot' ? ' on' : ''}" id="rateForgot">忘了${sugTag('forgot')}</button>
+      </div>
+    </div>` : `
+    ${card ? `<div class="card"><div class="hint" style="text-align:left">✅ 已安排下次复习：${fmtDue(card.due)}（阶梯 ${fmtStep(card.step)}）</div></div>` : ''}
+    <div class="rec-controls">
+      ${wrongIdx.length ? `<button class="primary" id="retryWrong">只重测错的 ${wrongIdx.length} 句</button>` : ''}
+      <button class="ghost" id="nextDueBtn" style="width:100%;display:none"></button>
+      <button class="ghost" id="retryAll" style="width:100%">再来一遍（全部）</button>
+      <button class="ghost" id="quizDone" style="width:100%">返回篇目</button>
+    </div>`}
+  `;
+  const wl = $('#wrongList');
+  wrongIdx.forEach(i => {
+    const el = document.createElement('div');
+    el.className = 'sent';
+    el.innerHTML = `<span class="idx">${i + 1}</span><span class="txt"></span>`;
+    el.querySelector('.txt').textContent = curText.sentences[i];
+    el.onclick = () => playSentAudio(i);
+    wl.appendChild(el);
+  });
+  if (needRate) {
+    $('#rateGood').onclick = () => applyRating(card, 'good');
+    $('#rateFuzzy').onclick = () => applyRating(card, 'fuzzy');
+    $('#rateForgot').onclick = () => applyRating(card, 'forgot');
+    return;
+  }
+  if (wrongIdx.length) $('#retryWrong').onclick = () => renderQuiz(wrongIdx);
+  $('#retryAll').onclick = () => renderQuiz();
+  $('#quizDone').onclick = () => renderDetail(curText.id);
+  if (card) { // 找下一个到期卡，串成一口气复习
+    const texts = await getAllTexts();
+    const t0 = todayTs();
+    let found = null;
+    outer: for (const t of texts) for (const c of (t.srsCards || []))
+      if (c.due <= t0 && c.id !== card.id) { found = { t, c }; break outer; }
+    if (found) {
+      const b = $('#nextDueBtn');
+      b.style.display = '';
+      b.textContent = `下一个到期：${found.t.title} · ${cardLabel(found.t, found.c)}`;
+      b.onclick = () => startReview(found.t.id, found.c.id);
+    }
+  }
+}
+
+/* ---------- 播放 ---------- */
+let tempAudio = null;
+function playBlob(blob) {
+  if (tempAudio) { tempAudio.pause(); URL.revokeObjectURL(tempAudio.src); }
+  tempAudio = new Audio(URL.createObjectURL(blob));
+  tempAudio.play();
+}
+function stopAll() {
+  player.audio.pause();
+  clearTimeout(player.gapTimer);
+  player.playing = false; player.idx = -1;
+  if (player.url) { URL.revokeObjectURL(player.url); player.url = null; }
+  highlight(-1);
+}
+function highlight(i) {
+  document.querySelectorAll('.sent').forEach(el => {
+    el.classList.toggle('playing', +el.dataset.idx === i);
+  });
+  if (i >= 0) {
+    const el = document.querySelector(`.sent[data-idx="${i}"]`);
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+}
+async function playIdx(i, opts = {}) {
+  if (i < 0 || !curText || i >= curText.sentences.length) return;
+  const rec = await getAudio(audioKey(curText.id, i));
+  if (!rec) {
+    toast(`第 ${i + 1} 句还没录音`);
+    if (player.continuous && !opts.userTap) { advance(i); }
+    return;
+  }
+  clearTimeout(player.gapTimer);
+  if (player.url) URL.revokeObjectURL(player.url);
+  player.url = URL.createObjectURL(rec.blob);
+  player.audio.src = player.url;
+  player.audio.playbackRate = parseFloat($('#rateSel').value);
+  player.idx = i; player.playing = true;
+  highlight(i); updatePlaybar();
+  try { await player.audio.play(); } catch (e) { player.playing = false; updatePlaybar(); }
+}
+function playOrder() { // 有勾选只走所选句，否则全篇
+  const all = curText.sentences.map((_, i) => i);
+  return selSet.size ? all.filter(i => selSet.has(i)) : all;
+}
+function advance(from) {
+  const order = playOrder();
+  const next = order.find(i => i > from);
+  if (next === undefined) {
+    if (player.continuous && order.length) { playIdx(order[0]); return; } // 循环回所选第一句
+    player.playing = false; player.idx = -1; highlight(-1); updatePlaybar();
+    return;
+  }
+  playIdx(next);
+}
+function onEnded() {
+  if (!curText) return;
+  const gap = parseFloat($('#gapSel').value) * 1000;
+  if (player.loop) {
+    player.gapTimer = setTimeout(() => { player.audio.currentTime = 0; player.audio.play(); }, gap);
+  } else if (player.continuous) {
+    player.gapTimer = setTimeout(() => advance(player.idx), gap);
+  } else {
+    player.playing = false; updatePlaybar();
+  }
+}
+function updatePlaybar() {
+  $('#playBtn').textContent = (player.playing && !player.audio.paused) ? '⏸' : '▶';
+  $('#loopBtn').classList.toggle('on', player.loop);
+  $('#contBtn').classList.toggle('on', player.continuous);
+}
+$('#playBtn').onclick = () => {
+  if (player.idx < 0) {
+    const order = playOrder();
+    if (order.length) playIdx(order[0], { userTap: true });
+    return;
+  }
+  if (player.audio.paused) { player.audio.play(); player.playing = true; }
+  else { player.audio.pause(); player.playing = false; }
+  updatePlaybar();
+};
+$('#prevBtn').onclick = () => {
+  const order = playOrder();
+  const prev = [...order].reverse().find(i => i < player.idx);
+  playIdx(prev !== undefined ? prev : order[0], { userTap: true });
+};
+$('#nextBtn').onclick = () => {
+  const order = playOrder();
+  const next = order.find(i => i > player.idx);
+  if (next !== undefined) playIdx(next, { userTap: true });
+};
+$('#loopBtn').onclick = () => { player.loop = !player.loop; if (player.loop) player.continuous = false; updatePlaybar(); };
+$('#contBtn').onclick = () => { player.continuous = !player.continuous; if (player.continuous) player.loop = false; updatePlaybar(); };
+$('#rateSel').onchange = () => { player.audio.playbackRate = parseFloat($('#rateSel').value); };
+
+/* ---------- 启动 ---------- */
+openDB().then(renderHome);
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
