@@ -338,6 +338,17 @@ async function renderDetail(id) {
   selMode = false;
   setHeader(curText.title, renderHome, { label: '编辑', fn: () => renderEdit(curText) });
   const done = curText.recorded ? Object.keys(curText.recorded).length : 0;
+  const timingLines = (() => {
+    const ts = curText.timings || [];
+    if (!ts.length) return '';
+    const byLabel = {};
+    ts.forEach(x => (byLabel[x.label] = byLabel[x.label] || []).push(x));
+    return Object.keys(byLabel)
+      .sort((a, b) => byLabel[b][byLabel[b].length - 1].at - byLabel[a][byLabel[a].length - 1].at)
+      .slice(0, 3)
+      .map(l => `<div class="hint" style="text-align:left;margin-bottom:4px">⏱ ${l}：${byLabel[l].slice(-6).map(x => fmtSecs(x.secs)).join(' → ')}</div>`)
+      .join('');
+  })();
   main.innerHTML = `
     <div class="toolbar">
       <button class="ghost" id="goRecord">🎙 录音（${done}/${curText.sentences.length}）</button>
@@ -346,7 +357,8 @@ async function renderDetail(id) {
       <button class="ghost" id="exportBtn">⬇ 导出</button>
       <button class="ghost danger" id="delBtn">删除</button>
     </div>
-    ${curText.lastQuiz ? `<div class="hint" style="text-align:left;margin-bottom:8px">上次测验：对 ${curText.lastQuiz.right} / ${curText.lastQuiz.total}${curText.lastQuiz.wrongIdx.length ? '，错句：' + curText.lastQuiz.wrongIdx.map(i => i + 1).join('、') : ''}</div>` : ''}
+    ${curText.lastQuiz ? `<div class="hint" style="text-align:left;margin-bottom:4px">上次测验：对 ${curText.lastQuiz.right} / ${curText.lastQuiz.total}${curText.lastQuiz.wrongIdx.length ? '，错句：' + curText.lastQuiz.wrongIdx.map(i => i + 1).join('、') : ''}</div>` : ''}
+    ${timingLines}
     <div class="hint" id="selHint" style="display:none;text-align:left;margin-bottom:10px">
       点句勾选/取消，连播和上下句只在所选句里走；一句不选 = 播全篇。
       <button class="ghost" id="selAll" style="padding:2px 10px;font-size:13px">全选</button>
@@ -788,7 +800,8 @@ async function applyRating(card, rating) {
   card.history.push({
     at: Date.now(), rating,
     total: quiz.base.length,
-    wrong: quiz.base.filter(i => quiz.results[i] === false).length
+    wrong: quiz.base.filter(i => quiz.results[i] === false).length,
+    secs: quiz.secs || null
   });
   curText.updated = Date.now();
   await putText(curText);
@@ -798,6 +811,21 @@ async function applyRating(card, rating) {
 
 /* ---------- 测验 ---------- */
 const quizPrefs = { mode: 'listen', shuffle: false, typing: false };
+const fmtSecs = s => s < 60 ? `${s}秒` : `${Math.floor(s / 60)}分${s % 60 ? s % 60 + '秒' : ''}`;
+const fmtClock = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+function quizScopeLabel() { // 计时按背诵范围归组对比
+  if (quiz.reviewCardId && curText.srsCards) {
+    const c = curText.srsCards.find(c => c.id === quiz.reviewCardId);
+    if (c) return cardLabel(curText, c);
+  }
+  const b = quiz.base;
+  if (b.length === curText.sentences.length) return '整篇';
+  const mn = Math.min(...b), mx = Math.max(...b);
+  return (mx - mn + 1 === b.length) ? `句${mn + 1}–${mx + 1}` : `${b.length}句`;
+}
+function stopQuizTimer() {
+  if (quiz && quiz.timer) { clearInterval(quiz.timer); quiz.timer = null; }
+}
 function diffChars(a, b) { // LCS 对齐，返回原文各字是否被打中
   const m = a.length, n = b.length;
   const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
@@ -855,7 +883,7 @@ function renderQuiz(indices, reviewCardId) {
   setHeader(reviewCardId ? '复习测验' : '测验', () => renderDetail(curText.id));
   main.innerHTML = `
     <div class="card">
-      <div class="hint" id="quizProg" style="text-align:left"></div>
+      <div class="hint" id="quizProg" style="text-align:left"><span id="quizProgTxt"></span> · ⏱ <span id="quizTimer">0:00</span></div>
       <div class="rec-current" id="quizPrompt"></div>
       <div class="hint" id="quizHintTxt"></div>
       <textarea id="quizType" style="display:none;margin-top:8px;min-height:70px" placeholder="在这里打字默写这一句…"></textarea>
@@ -907,12 +935,19 @@ function renderQuiz(indices, reviewCardId) {
   startQuizRound(indices || curText.sentences.map((_, i) => i), reviewCardId || null);
 }
 function startQuizRound(base, reviewCardId) {
+  stopQuizTimer();
   quiz = {
     mode: quizPrefs.mode, base: [...base],
     order: quizPrefs.shuffle ? shuffleArr([...base]) : [...base],
     pos: 0, results: {},
-    reviewCardId: reviewCardId || null, rated: false, saved: false
+    reviewCardId: reviewCardId || null, rated: false, saved: false,
+    startedAt: Date.now(), timer: null
   };
+  quiz.timer = setInterval(() => {
+    if (view !== 'quiz') return stopQuizTimer();
+    const el = $('#quizTimer');
+    if (el) el.textContent = fmtClock(Math.floor((Date.now() - quiz.startedAt) / 1000));
+  }, 1000);
   showQuizCard();
 }
 function judgeQuiz(ok) {
@@ -925,7 +960,7 @@ function showQuizCard() {
   if (quiz.pos >= total) return showQuizEnd();
   const i = quiz.order[quiz.pos];
   const vals = Object.values(quiz.results);
-  $('#quizProg').textContent = `第 ${quiz.pos + 1} / ${total} 题 · 对 ${vals.filter(v => v).length} · 错 ${vals.filter(v => !v).length}`;
+  $('#quizProgTxt').textContent = `第 ${quiz.pos + 1} / ${total} 题 · 对 ${vals.filter(v => v).length} · 错 ${vals.filter(v => !v).length}`;
   $('#quizAnswer').style.display = 'none';
   $('#quizHintTxt').textContent = '';
   $('#quizType').style.display = quizPrefs.typing ? '' : 'none';
@@ -946,12 +981,22 @@ function showQuizCard() {
 async function showQuizEnd() {
   const wrongIdx = quiz.base.filter(i => quiz.results[i] === false);
   const right = Object.values(quiz.results).filter(v => v).length;
+  stopQuizTimer();
   if (!quiz.saved) {
     quiz.saved = true;
+    quiz.secs = Math.max(1, Math.round((Date.now() - quiz.startedAt) / 1000));
+    quiz.label = quizScopeLabel();
+    curText.timings = curText.timings || [];
+    const prevSame = [...curText.timings].reverse().find(x => x.label === quiz.label);
+    quiz.prevSecs = prevSame ? prevSame.secs : null;
+    curText.timings.push({ at: Date.now(), secs: quiz.secs, label: quiz.label, n: quiz.base.length, wrong: wrongIdx.length });
     curText.lastQuiz = { at: Date.now(), total: quiz.order.length, right, wrongIdx };
     curText.updated = Date.now();
     await putText(curText);
   }
+  const d = quiz.prevSecs != null ? quiz.prevSecs - quiz.secs : null;
+  const timeLine = `⏱ 本次用时 ${fmtSecs(quiz.secs)}` +
+    (d === null ? '（首次计时）' : d > 0 ? `，比上次快 ${fmtSecs(d)} 🎉` : d < 0 ? `，比上次慢 ${fmtSecs(-d)}` : '，与上次持平');
   const card = quiz.reviewCardId && curText.srsCards
     ? curText.srsCards.find(c => c.id === quiz.reviewCardId) : null;
   const needRate = card && !quiz.rated;
@@ -961,7 +1006,8 @@ async function showQuizEnd() {
   main.innerHTML = `
     <div class="card" style="text-align:center">
       <h3 style="margin:4px 0 8px">${card ? '复习完成' : '测验完成'}</h3>
-      <p style="margin:0 0 10px">共 ${quiz.order.length} 题 · 对 ${right} · 错 ${wrongIdx.length}</p>
+      <p style="margin:0 0 6px">共 ${quiz.order.length} 题 · 对 ${right} · 错 ${wrongIdx.length}</p>
+      <p class="hint" style="margin:0 0 10px">${timeLine}</p>
       ${wrongIdx.length ? '<div class="hint" style="text-align:left">错句（点句可放录音）：</div>' : '<p>🎉 全对！</p>'}
       <div id="wrongList" style="text-align:left"></div>
     </div>
