@@ -151,7 +151,7 @@
 
 <script>
 /* ---------- IndexedDB ---------- */
-const DB_NAME = 'beishu', DB_VER = 1;
+const DB_NAME = 'beishu', DB_VER = 2;
 let db;
 function openDB() {
   return new Promise((res, rej) => {
@@ -160,6 +160,7 @@ function openDB() {
       const d = req.result;
       if (!d.objectStoreNames.contains('texts')) d.createObjectStore('texts', { keyPath: 'id' });
       if (!d.objectStoreNames.contains('audios')) d.createObjectStore('audios', { keyPath: 'key' });
+      if (!d.objectStoreNames.contains('projects')) d.createObjectStore('projects', { keyPath: 'id' });
     };
     req.onsuccess = () => { db = req.result; res(); };
     req.onerror = () => rej(req.error);
@@ -187,6 +188,16 @@ const putAudio = (key, blob, mime) => tx('audios', 'readwrite', s => s.put({ key
 const delAudio = key => tx('audios', 'readwrite', s => s.delete(key));
 const getAudio = key => new Promise((res, rej) => {
   const req = db.transaction('audios').objectStore('audios').get(key);
+  req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+});
+const putProject = p => tx('projects', 'readwrite', s => s.put(p));
+const delProject = id => tx('projects', 'readwrite', s => s.delete(id));
+const getAllProjects = () => new Promise((res, rej) => {
+  const req = db.transaction('projects').objectStore('projects').getAll();
+  req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+});
+const getProject = id => new Promise((res, rej) => {
+  const req = db.transaction('projects').objectStore('projects').get(id);
   req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
 });
 
@@ -218,6 +229,7 @@ function fmtDue(due) {
   const dd = Math.round((due - todayTs()) / DAY);
   return dd <= 0 ? '今天' : dd === 1 ? '明天' : dd + ' 天后';
 }
+const fmtDate = ts => { const d = new Date(ts); return (d.getMonth() + 1) + '/' + d.getDate(); };
 function cardLabel(t, c) {
   const cards = t.srsCards || [];
   if (cards.length <= 1) return '整篇';
@@ -254,8 +266,29 @@ async function renderHome() {
   setHeader('背书', null, { label: '＋ 新建', fn: () => renderEdit(null) });
   const texts = (await getAllTexts()).sort((a, b) => b.updated - a.updated);
   main.innerHTML = '';
+  const projects = (await getAllProjects()).sort((a, b) => b.updated - a.updated);
+  const pc = document.createElement('div');
+  pc.className = 'card';
+  pc.innerHTML = `<div style="display:flex;align-items:center;margin-bottom:6px"><h3 style="margin:0;flex:1;font-size:18px">🎯 背诵实测</h3><button class="ghost" id="newPrj" style="padding:4px 12px;font-size:14px">＋ 立项</button></div>` +
+    (projects.length ? '' : '<div class="hint" style="text-align:left">自己立项，整篇自由背诵录音，计时即录音时长，追踪一次比一次快。</div>');
+  for (const p of projects) {
+    const atts = p.attempts || [];
+    const row = document.createElement('div');
+    row.className = 'sent';
+    row.innerHTML = `<span class="txt"></span><span class="mark"></span>`;
+    row.querySelector('.txt').textContent = p.name;
+    row.querySelector('.mark').textContent = atts.length
+      ? `${atts.length} 次 · 最近 ${fmtSecs(atts[atts.length - 1].secs)}` : '未测';
+    row.onclick = () => renderProject(p.id);
+    pc.appendChild(row);
+  }
+  main.appendChild(pc);
+  pc.querySelector('#newPrj').onclick = () => renderProjectEdit(null);
   if (!texts.length) {
-    main.innerHTML = '<div class="card"><p>还没有篇目。</p><p class="hint">点右上角「＋ 新建」，粘贴要背的古文，自动分句后逐句录音，就可以开始背了。</p></div>';
+    const intro = document.createElement('div');
+    intro.className = 'card';
+    intro.innerHTML = '<p>还没有篇目。</p><p class="hint">点右上角「＋ 新建」，粘贴要背的古文，自动分句后逐句录音，就可以开始背了。</p>';
+    main.appendChild(intro);
     return;
   }
   const t0 = todayTs();
@@ -415,6 +448,136 @@ function refreshMarks() {
     else mark.textContent = selSet.has(i) ? '☑' : (has ? '' : '未录');
     mark.classList.toggle('selmark', selSet.has(i));
   });
+}
+
+/* ---------- 背诵实测（自由录制计时） ---------- */
+let prjRec = null, prjTimer = null;
+async function renderProjectEdit(existing) {
+  view = 'prjEdit'; stopAll(); $('#playbar').style.display = 'none';
+  setHeader(existing ? '编辑项目' : '新建实测项目', () => existing ? renderProject(existing.id) : renderHome());
+  const texts = (await getAllTexts()).sort((a, b) => b.updated - a.updated);
+  main.innerHTML = `
+    <label>项目名称</label>
+    <input type="text" id="prjName" placeholder="如：滕王阁序·全篇实测">
+    <label>关联篇目（可选，实测时可以看一眼原文）</label>
+    <select id="prjText" style="width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:16px;font-family:inherit"></select>
+    <div style="margin-top:14px"><button class="primary" id="prjSave">保存</button></div>`;
+  const sel = $('#prjText');
+  const none = document.createElement('option');
+  none.value = ''; none.textContent = '不关联';
+  sel.appendChild(none);
+  for (const t of texts) {
+    const o = document.createElement('option');
+    o.value = t.id; o.textContent = t.title;
+    sel.appendChild(o);
+  }
+  if (existing) { $('#prjName').value = existing.name; sel.value = existing.textId || ''; }
+  $('#prjSave').onclick = async () => {
+    const name = $('#prjName').value.trim();
+    if (!name) return toast('项目名称要填');
+    const p = existing || { id: 'p' + Date.now().toString(36), created: Date.now(), attempts: [] };
+    p.name = name; p.textId = sel.value || null; p.updated = Date.now();
+    await putProject(p);
+    toast('已保存');
+    renderProject(p.id);
+  };
+}
+async function renderProject(id) {
+  view = 'project'; stopAll(); $('#playbar').style.display = 'none';
+  clearInterval(prjTimer);
+  const p = await getProject(id);
+  if (!p) return renderHome();
+  const linked = p.textId ? await getText(p.textId) : null;
+  setHeader(p.name, renderHome, { label: '编辑', fn: () => renderProjectEdit(p) });
+  const atts = p.attempts || [];
+  const best = atts.length ? Math.min(...atts.map(a => a.secs)) : null;
+  main.innerHTML = `
+    <div class="card" style="text-align:center">
+      <div class="hint">${atts.length ? `已测 ${atts.length} 次 · 最佳 ${fmtSecs(best)} · 最近 ${fmtSecs(atts[atts.length - 1].secs)}` : '还没有实测记录'}</div>
+      <div id="prjClock" style="font-size:46px;margin:8px 0;font-variant-numeric:tabular-nums">0:00</div>
+      <div class="rec-controls" style="margin-bottom:6px">
+        <button id="recBtn"><div class="dot"></div></button>
+        <div class="hint" id="prjStatus">点红钮开始：计时与录音同时启动；背完再点一下，结束并保存</div>
+      </div>
+      ${linked ? '<button class="ghost" id="peekBtn" style="margin-top:8px">👀 看一眼原文</button>' : ''}
+    </div>
+    <div class="card" id="peekCard" style="display:none;line-height:2"></div>
+    ${atts.length > 1 ? `<div class="hint" style="text-align:left;margin-bottom:8px">⏱ ${atts.slice(-6).map(a => fmtSecs(a.secs)).join(' → ')}</div>` : ''}
+    <div id="attList"></div>
+    <button class="ghost danger" id="prjDel" style="margin:8px 0;font-size:13px;padding:4px 10px">删除项目</button>`;
+  if (linked) {
+    $('#peekCard').textContent = linked.sentences.join('');
+    $('#peekBtn').onclick = () => {
+      const c = $('#peekCard');
+      c.style.display = c.style.display === 'none' ? '' : 'none';
+    };
+  }
+  const list = $('#attList');
+  [...atts].reverse().forEach((a, ri) => {
+    const k = atts.length - 1 - ri;
+    const row = document.createElement('div');
+    row.className = 'sent';
+    row.style.cursor = 'default';
+    row.innerHTML = `<span class="idx">${k + 1}</span><span class="txt"></span>
+      <button class="ghost" style="padding:4px 12px;font-size:14px">▶</button>
+      <button class="ghost danger" style="padding:4px 10px;font-size:13px">删</button>`;
+    row.querySelector('.txt').textContent = `${fmtDate(a.at)} · ${fmtSecs(a.secs)}${a.secs === best ? ' 🏆' : ''}`;
+    const [playB, delB] = row.querySelectorAll('button');
+    playB.onclick = async () => {
+      const rec = await getAudio(`prj:${p.id}:${a.id}`);
+      if (!rec) return toast('录音丢失');
+      playBlob(rec.blob);
+    };
+    delB.onclick = async () => {
+      if (!confirm(`删除第 ${k + 1} 次记录（${fmtSecs(a.secs)}）？`)) return;
+      await delAudio(`prj:${p.id}:${a.id}`);
+      p.attempts = p.attempts.filter(x => x.id !== a.id);
+      p.updated = Date.now();
+      await putProject(p);
+      renderProject(p.id);
+    };
+    list.appendChild(row);
+  });
+  $('#prjDel').onclick = async () => {
+    if (!confirm(`删除项目「${p.name}」及全部 ${atts.length} 条实测录音？`)) return;
+    for (const a of atts) await delAudio(`prj:${p.id}:${a.id}`);
+    await delProject(p.id);
+    renderHome();
+  };
+  $('#recBtn').onclick = async () => {
+    if (prjRec) { prjRec.stop(); return; }
+    try {
+      if (!mediaStream) mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) { return toast('无法访问麦克风：' + e.message); }
+    const mime = pickMime();
+    if (mime === null) return toast('此浏览器不支持录音');
+    const cks = [];
+    const startAt = Date.now();
+    prjRec = new MediaRecorder(mediaStream, mime ? { mimeType: mime } : undefined);
+    prjRec.ondataavailable = e => { if (e.data.size) cks.push(e.data); };
+    prjRec.onstop = async () => {
+      clearInterval(prjTimer);
+      const mt = prjRec && prjRec.mimeType;
+      prjRec = null;
+      const secs = Math.max(1, Math.round((Date.now() - startAt) / 1000));
+      const att = { id: 'a' + Date.now().toString(36), at: Date.now(), secs };
+      await putAudio(`prj:${p.id}:${att.id}`, new Blob(cks, { type: mt || 'audio/webm' }), mt || 'audio/webm');
+      p.attempts = p.attempts || [];
+      p.attempts.push(att);
+      p.updated = Date.now();
+      await putProject(p);
+      toast(`第 ${p.attempts.length} 次：${fmtSecs(secs)}，已记录`);
+      renderProject(p.id);
+    };
+    prjRec.start();
+    $('#recBtn').classList.add('recording');
+    $('#prjStatus').textContent = '录音中…背完点一下结束';
+    prjTimer = setInterval(() => {
+      if (view !== 'project') { clearInterval(prjTimer); return; }
+      const el = $('#prjClock');
+      if (el) el.textContent = fmtClock(Math.floor((Date.now() - startAt) / 1000));
+    }, 500);
+  };
 }
 
 /* ---------- 录音 ---------- */
