@@ -1,4 +1,4 @@
-const CACHE = 'beishu-v4';
+const CACHE = 'beishu-v5';
 const ASSETS = ['.', 'index.html', 'manifest.json'];
 
 self.addEventListener('install', e => {

@@ -261,23 +261,23 @@ async function fetchBoard(piece, orderCol) {
 }
 // —— 挑战任务 ——
 async function listChallenges() {
-  const res = await sbFetch('/rest/v1/challenges?select=id,title,intro,author_id,questions,updated_at,profiles(nickname)&order=updated_at.desc&limit=100');
+  const res = await sbFetch('/rest/v1/challenges?select=id,title,intro,kind,body,author_id,questions,updated_at,profiles(nickname)&order=updated_at.desc&limit=100');
   if (!res.ok) throw new Error('挑战列表加载失败');
   return await res.json();
 }
 async function getChallenge(id) {
-  const res = await sbFetch(`/rest/v1/challenges?id=eq.${id}&select=id,title,intro,author_id,questions,updated_at,profiles(nickname)`);
+  const res = await sbFetch(`/rest/v1/challenges?id=eq.${id}&select=id,title,intro,kind,body,author_id,questions,updated_at,profiles(nickname)`);
   if (!res.ok) throw new Error('加载失败');
   return (await res.json())[0] || null;
 }
 async function publishChallenge(obj, existingId) {
-  const body = { title: obj.title, intro: obj.intro, questions: obj.questions, updated_at: new Date().toISOString() };
+  const payload = { title: obj.title, intro: obj.intro, kind: obj.kind || 'choice', body: obj.body || '', questions: obj.questions || [], updated_at: new Date().toISOString() };
   let res;
   if (existingId) {
-    res = await sbFetch(`/rest/v1/challenges?id=eq.${existingId}`, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(body) });
+    res = await sbFetch(`/rest/v1/challenges?id=eq.${existingId}`, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(payload) });
   } else {
-    body.author_id = auth.uid;
-    res = await sbFetch('/rest/v1/challenges', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify(body) });
+    payload.author_id = auth.uid;
+    res = await sbFetch('/rest/v1/challenges', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify(payload) });
   }
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || '发布失败');
   return (await res.json())[0];
@@ -294,8 +294,9 @@ async function submitChallengeResult(cid, score, total, secs) {
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || '提交失败');
 }
-async function challengeBoard(cid) {
-  const res = await sbFetch(`/rest/v1/challenge_results?challenge_id=eq.${cid}&select=user_id,score,total,secs,profiles(nickname)&order=score.desc,secs.asc&limit=100`);
+async function challengeBoard(cid, kind) {
+  const order = kind === 'recite' ? 'secs.asc' : 'score.desc,secs.asc';
+  const res = await sbFetch(`/rest/v1/challenge_results?challenge_id=eq.${cid}&select=user_id,score,total,secs,profiles(nickname)&order=${order}&limit=100`);
   if (!res.ok) throw new Error('榜单加载失败');
   return await res.json();
 }
@@ -433,7 +434,8 @@ async function renderHome() {
   }
   main.appendChild(ac);
 
-  const projects = (await getAllProjects()).sort((a, b) => b.updated - a.updated);
+  // 挑战绑定的项目不在本地实测列表里显示（从挑战广场进入）
+  const projects = (await getAllProjects()).filter(p => !p.challengeId).sort((a, b) => b.updated - a.updated);
   const pc = document.createElement('div');
   pc.className = 'card';
   pc.innerHTML = `<div style="display:flex;align-items:center;margin-bottom:6px"><h3 style="margin:0;flex:1;font-size:18px">🎯 背诵实测</h3><button class="ghost" id="newPrj" style="padding:4px 12px;font-size:14px">＋ 立项</button></div>` +
@@ -651,11 +653,33 @@ async function renderCloudCard(p, best) {
     return;
   }
   if (!loggedIn()) {
-    card.innerHTML = `<div style="display:flex;align-items:center;gap:10px"><span class="hint" style="flex:1">登录后可上传最佳成绩、看排行榜</span><button class="ghost" id="cloudLogin" style="padding:4px 14px;font-size:14px">登录</button></div>`;
+    card.innerHTML = `<div style="display:flex;align-items:center;gap:10px"><span class="hint" style="flex:1">登录后可上传成绩、看排行榜</span><button class="ghost" id="cloudLogin" style="padding:4px 14px;font-size:14px">登录</button></div>`;
     card.querySelector('#cloudLogin').onclick = () => renderLogin(() => renderProject(p.id));
     return;
   }
   const total = atts.reduce((s, a) => s + a.secs, 0);
+  // 背诵题挑战：上传最佳用时到挑战榜
+  if (p.challengeId) {
+    card.innerHTML = `
+      <div class="hint" style="text-align:left;margin-bottom:8px">🏆 挑战榜（背诵题：<b>${p.name}</b>，比用时）</div>
+      <div class="rec-nav">
+        <button class="primary" id="upBtn" ${best ? '' : 'disabled'} style="flex:2">⬆ 上传最佳用时到榜</button>
+        <button class="ghost" id="boardBtn" style="flex:1">看榜</button>
+      </div>
+      <div class="hint" id="cloudMsg" style="text-align:left;margin-top:8px">${best ? '你的最佳：' + fmtSecs(best) : '先背一次再上传'}</div>`;
+    $('#upBtn').onclick = async () => {
+      $('#upBtn').disabled = true; $('#cloudMsg').textContent = '上传中…';
+      try {
+        await saveNickname(auth.nickname || '匿名');
+        await submitChallengeResult(p.challengeId, 0, 0, best);
+        toast('已上传到挑战榜！');
+        $('#cloudMsg').textContent = '✅ 已上传最佳用时 ' + fmtSecs(best);
+        $('#upBtn').disabled = false;
+      } catch (e) { $('#cloudMsg').textContent = '上传失败：' + e.message; $('#upBtn').disabled = false; }
+    };
+    $('#boardBtn').onclick = async () => { const c = await getChallenge(p.challengeId); if (c) renderChallengeBoard(c); };
+    return;
+  }
   card.innerHTML = `
     <div class="hint" style="text-align:left;margin-bottom:8px">🏆 排行榜（篇目：<b>${p.name}</b>）</div>
     <div class="rec-nav">
@@ -757,7 +781,8 @@ async function renderChallenges() {
     rows.forEach(c => {
       const el = document.createElement('div');
       el.className = 'card text-item';
-      el.innerHTML = `<h3></h3><div class="meta">${(c.questions || []).length} 题 · 出题人 ${(c.profiles && c.profiles.nickname) || '匿名'}${c.author_id === (auth && auth.uid) ? ' · 我的' : ''}</div>`;
+      const tag = c.kind === 'recite' ? '🎙 背诵题' : '📝 选择题 ' + (c.questions || []).length + ' 题';
+      el.innerHTML = `<h3></h3><div class="meta">${tag} · 出题人 ${(c.profiles && c.profiles.nickname) || '匿名'}${c.author_id === (auth && auth.uid) ? ' · 我的' : ''}</div>`;
       el.querySelector('h3').textContent = c.title;
       el.onclick = () => renderChallengeDetail(c.id);
       list.appendChild(el);
@@ -772,23 +797,32 @@ async function renderChallengeDetail(id) {
   try { c = await getChallenge(id); } catch (e) { main.innerHTML = `<div class="card"><div class="hint">${e.message}</div></div>`; return; }
   if (!c) { main.innerHTML = '<div class="card"><div class="hint">挑战不存在或已下架。</div></div>'; return; }
   const mine = loggedIn() && c.author_id === auth.uid;
+  const recite = c.kind === 'recite';
   main.innerHTML = `
     <div class="card">
-      <h3 style="margin:0 0 6px"></h3>
+      <div class="hint" style="text-align:left">${recite ? '🎙 背诵题' : '📝 选择题'}</div>
+      <h3 style="margin:2px 0 6px"></h3>
       <div class="meta" id="cAuthor" style="color:var(--muted);font-size:13px"></div>
       <div id="cIntro" style="margin-top:8px"></div>
+      ${recite && c.body ? '<button class="ghost" id="cPeek" style="margin-top:8px">👀 看原文</button><div class="card" id="cBody" style="display:none;line-height:2;margin-top:8px"></div>' : ''}
       <div class="hint" id="cStat" style="text-align:left;margin-top:8px"></div>
     </div>
     <div class="rec-controls">
-      <button class="primary" id="cPlay">▶ 开始挑战（${(c.questions || []).length} 题）</button>
+      <button class="primary" id="cPlay">${recite ? '🎙 开始背诵计时' : '▶ 开始挑战（' + (c.questions || []).length + ' 题）'}</button>
       <button class="ghost" id="cBoard" style="width:100%">🏆 看榜</button>
       ${mine ? '<div class="rec-nav"><button class="ghost" id="cEdit">编辑</button><button class="ghost danger" id="cDel">下架</button></div>' : ''}
     </div>`;
   main.querySelector('h3').textContent = c.title;
   $('#cAuthor').textContent = '出题人：' + ((c.profiles && c.profiles.nickname) || '匿名');
   $('#cIntro').textContent = c.intro || '';
-  challengeBoard(id).then(b => { $('#cStat').textContent = `${b.length} 人挑战过` + (b.length ? `，最高 ${b[0].score}/${b[0].total}` : ''); }).catch(() => {});
-  $('#cPlay').onclick = () => renderChallengePlay(c);
+  if (recite && c.body) {
+    $('#cBody').textContent = c.body;
+    $('#cPeek').onclick = () => { const b = $('#cBody'); b.style.display = b.style.display === 'none' ? '' : 'none'; };
+  }
+  challengeBoard(id, c.kind).then(b => {
+    $('#cStat').textContent = `${b.length} 人挑战过` + (b.length ? (recite ? `，最快 ${fmtSecs(b[0].secs)}` : `，最高 ${b[0].score}/${b[0].total}`) : '');
+  }).catch(() => {});
+  $('#cPlay').onclick = () => recite ? openReciteChallenge(c) : renderChallengePlay(c);
   $('#cBoard').onclick = () => renderChallengeBoard(c);
   if (mine) {
     $('#cEdit').onclick = () => renderChallengeEdit(c);
@@ -798,30 +832,64 @@ async function renderChallengeDetail(id) {
     };
   }
 }
+async function openReciteChallenge(c) {
+  // 背诵题 = 与该挑战绑定的本地实测项目（自带秒表/趋势/历史），上传走挑战榜
+  const pid = 'chal_' + c.id;
+  let p = await getProject(pid);
+  if (!p) {
+    p = { id: pid, created: Date.now(), attempts: [], name: c.title, challengeId: c.id, updated: Date.now() };
+    await putProject(p);
+  } else if (p.name !== c.title) {
+    p.name = c.title; await putProject(p);
+  }
+  renderProject(pid);
+}
 let editState = null;
 function renderChallengeEdit(existing) {
   view = 'chalEdit'; stopAll(); $('#playbar').style.display = 'none';
   if (!loggedIn()) return renderLogin(() => renderChallengeEdit(existing));
   setHeader(existing ? '编辑挑战' : '出题', () => existing ? renderChallengeDetail(existing.id) : renderChallenges());
   editState = existing
-    ? { id: existing.id, title: existing.title, intro: existing.intro || '', qs: JSON.parse(JSON.stringify(existing.questions || [])) }
-    : { id: null, title: '', intro: '', qs: [] };
+    ? { id: existing.id, kind: existing.kind || 'choice', title: existing.title, intro: existing.intro || '', body: existing.body || '', qs: JSON.parse(JSON.stringify(existing.questions || [])) }
+    : { id: null, kind: 'choice', title: '', intro: '', body: '', qs: [] };
   main.innerHTML = `
+    <label>类型</label>
+    <div class="toolbar" ${existing ? 'style="opacity:.6;pointer-events:none"' : ''}>
+      <button class="ghost" id="kChoice">📝 选择题</button>
+      <button class="ghost" id="kRecite">🎙 背诵题</button>
+    </div>
     <label>标题</label>
     <input type="text" id="cTitle" placeholder="如：滕王阁序·接句挑战">
     <label>说明（可选）</label>
     <input type="text" id="cIntroIn" placeholder="一句话介绍">
-    <div class="toolbar" style="margin-top:12px">
-      <button class="ghost" id="impBtn">📥 从篇目生成接句题</button>
-      <button class="ghost" id="addQ">＋ 加一题</button>
+    <div id="choiceEdit">
+      <div class="toolbar" style="margin-top:12px">
+        <button class="ghost" id="impBtn">📥 从篇目生成接句题</button>
+        <button class="ghost" id="addQ">＋ 加一题</button>
+      </div>
+      <div id="qList"></div>
+      <div id="impPick"></div>
     </div>
-    <div id="qList"></div>
-    <div id="impPick"></div>
+    <div id="reciteEdit" style="display:none">
+      <label>要背诵的原文（可选，供挑战者对照）</label>
+      <textarea id="cBodyIn" placeholder="粘贴要背的原文……大家按用时比拼，录音留在各自本地"></textarea>
+    </div>
     <div style="margin:14px 0"><button class="primary" id="pubBtn">${existing ? '更新发布' : '发布'}</button></div>`;
+  const paintKind = () => {
+    $('#kChoice').classList.toggle('on', editState.kind === 'choice');
+    $('#kRecite').classList.toggle('on', editState.kind === 'recite');
+    $('#choiceEdit').style.display = editState.kind === 'choice' ? '' : 'none';
+    $('#reciteEdit').style.display = editState.kind === 'recite' ? '' : 'none';
+  };
+  $('#kChoice').onclick = () => { editState.kind = 'choice'; paintKind(); };
+  $('#kRecite').onclick = () => { editState.kind = 'recite'; paintKind(); };
+  paintKind();
   $('#cTitle').value = editState.title;
   $('#cIntroIn').value = editState.intro;
+  $('#cBodyIn').value = editState.body;
   $('#cTitle').oninput = e => editState.title = e.target.value;
   $('#cIntroIn').oninput = e => editState.intro = e.target.value;
+  $('#cBodyIn').oninput = e => editState.body = e.target.value;
   $('#addQ').onclick = () => { editState.qs.push({ q: '', options: ['', ''], answer: 0 }); paintQs(); };
   $('#impBtn').onclick = async () => {
     const texts = (await getAllTexts()).sort((a, b) => b.updated - a.updated);
@@ -887,17 +955,22 @@ function paintQs() {
 async function doPublish() {
   const st = editState;
   if (!st.title.trim()) return toast('填个标题');
-  if (!st.qs.length) return toast('至少一道题');
-  for (let k = 0; k < st.qs.length; k++) {
-    const q = st.qs[k];
-    if (!q.q.trim()) return toast(`第 ${k + 1} 题题干空着`);
-    const opts = q.options.map(o => o.trim());
-    if (opts.filter(Boolean).length < 2) return toast(`第 ${k + 1} 题至少两个选项`);
-    if (!opts[q.answer]) return toast(`第 ${k + 1} 题的正确答案选项是空的`);
+  let clean;
+  if (st.kind === 'recite') {
+    clean = { kind: 'recite', title: st.title.trim(), intro: st.intro.trim(), body: (st.body || '').trim(), questions: [] };
+  } else {
+    if (!st.qs.length) return toast('至少一道题');
+    for (let k = 0; k < st.qs.length; k++) {
+      const q = st.qs[k];
+      if (!q.q.trim()) return toast(`第 ${k + 1} 题题干空着`);
+      const opts = q.options.map(o => o.trim());
+      if (opts.filter(Boolean).length < 2) return toast(`第 ${k + 1} 题至少两个选项`);
+      if (!opts[q.answer]) return toast(`第 ${k + 1} 题的正确答案选项是空的`);
+    }
+    clean = { kind: 'choice', title: st.title.trim(), intro: st.intro.trim(), body: '', questions: st.qs.map(q => ({ q: q.q.trim(), options: q.options.map(o => o.trim()).filter(Boolean), answer: q.answer })) };
+    // 过滤空选项后修正 answer 索引
+    clean.questions.forEach((q, i) => { const orig = st.qs[i]; q.answer = q.options.indexOf(orig.options[orig.answer].trim()); if (q.answer < 0) q.answer = 0; });
   }
-  const clean = { title: st.title.trim(), intro: st.intro.trim(), questions: st.qs.map(q => ({ q: q.q.trim(), options: q.options.map(o => o.trim()).filter(Boolean), answer: q.answer })) };
-  // 过滤空选项后修正 answer 索引
-  clean.questions.forEach((q, i) => { const orig = st.qs[i]; q.answer = q.options.indexOf(orig.options[orig.answer].trim()); if (q.answer < 0) q.answer = 0; });
   $('#pubBtn').disabled = true;
   try {
     const saved = await publishChallenge(clean, st.id);
@@ -974,9 +1047,10 @@ async function showChalEnd() {
 async function renderChallengeBoard(c) {
   view = 'chalBoard'; stopAll(); $('#playbar').style.display = 'none';
   setHeader('挑战榜', () => renderChallengeDetail(c.id));
-  main.innerHTML = `<div class="hint" style="text-align:left;margin-bottom:8px">挑战：<b>${c.title}</b>（按对题数排，同分比用时）</div><div id="cbList"><div class="hint">加载中…</div></div>`;
+  const recite = c.kind === 'recite';
+  main.innerHTML = `<div class="hint" style="text-align:left;margin-bottom:8px">挑战：<b>${c.title}</b>（${recite ? '按用时排，越快越前' : '按对题数排，同分比用时'}）</div><div id="cbList"><div class="hint">加载中…</div></div>`;
   try {
-    const rows = await challengeBoard(c.id);
+    const rows = await challengeBoard(c.id, c.kind);
     const list = $('#cbList');
     if (!rows.length) { list.innerHTML = '<div class="hint">还没有人挑战，来当第一个！</div>'; return; }
     list.innerHTML = '';
@@ -986,7 +1060,8 @@ async function renderChallengeBoard(c) {
       const el = document.createElement('div');
       el.className = 'sent'; el.style.cursor = 'default';
       if (mine) el.style.background = 'var(--accent-soft)';
-      el.innerHTML = `<span class="idx">${medal}</span><span class="txt"></span><span class="mark">${r.score}/${r.total} · ${fmtSecs(r.secs)}</span>`;
+      const val = recite ? fmtSecs(r.secs) : `${r.score}/${r.total} · ${fmtSecs(r.secs)}`;
+      el.innerHTML = `<span class="idx">${medal}</span><span class="txt"></span><span class="mark">${val}</span>`;
       el.querySelector('.txt').textContent = ((r.profiles && r.profiles.nickname) || '匿名') + (mine ? '（我）' : '');
       list.appendChild(el);
     });
@@ -1203,7 +1278,10 @@ async function renderProject(id) {
   const p = await getProject(id);
   if (!p) return renderHome();
   const linked = p.textId ? await getText(p.textId) : null;
-  setHeader(p.name, renderHome, { label: '编辑', fn: () => renderProjectEdit(p) });
+  if (p.challengeId)
+    setHeader(p.name, () => renderChallengeDetail(p.challengeId));
+  else
+    setHeader(p.name, renderHome, { label: '编辑', fn: () => renderProjectEdit(p) });
   const atts = p.attempts || [];
   const best = atts.length ? Math.min(...atts.map(a => a.secs)) : null;
   const pass = evalPass(p);
