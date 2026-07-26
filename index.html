@@ -260,18 +260,31 @@ async function fetchBoard(piece, orderCol) {
   return await res.json();
 }
 // —— 挑战任务 ——
+let _hasKind = null; // 探测 challenges 是否已有 kind/body 列（背诵题功能）
+async function challengesHasKind() {
+  if (_hasKind !== null) return _hasKind;
+  try { const r = await sbFetch('/rest/v1/challenges?select=kind&limit=1'); _hasKind = r.ok; } catch (e) { _hasKind = false; }
+  return _hasKind;
+}
 async function listChallenges() {
-  const res = await sbFetch('/rest/v1/challenges?select=id,title,intro,kind,body,author_id,questions,updated_at,profiles(nickname)&order=updated_at.desc&limit=100');
+  const cols = (await challengesHasKind())
+    ? 'id,title,intro,kind,body,author_id,questions,updated_at,profiles(nickname)'
+    : 'id,title,intro,author_id,questions,updated_at,profiles(nickname)';
+  const res = await sbFetch('/rest/v1/challenges?select=' + cols + '&order=updated_at.desc&limit=100');
   if (!res.ok) throw new Error('挑战列表加载失败');
   return await res.json();
 }
 async function getChallenge(id) {
-  const res = await sbFetch(`/rest/v1/challenges?id=eq.${id}&select=id,title,intro,kind,body,author_id,questions,updated_at,profiles(nickname)`);
+  const cols = (await challengesHasKind())
+    ? 'id,title,intro,kind,body,author_id,questions,updated_at,profiles(nickname)'
+    : 'id,title,intro,author_id,questions,updated_at,profiles(nickname)';
+  const res = await sbFetch(`/rest/v1/challenges?id=eq.${id}&select=${cols}`);
   if (!res.ok) throw new Error('加载失败');
   return (await res.json())[0] || null;
 }
 async function publishChallenge(obj, existingId) {
-  const payload = { title: obj.title, intro: obj.intro, kind: obj.kind || 'choice', body: obj.body || '', questions: obj.questions || [], updated_at: new Date().toISOString() };
+  const payload = { title: obj.title, intro: obj.intro, questions: obj.questions || [], updated_at: new Date().toISOString() };
+  if (await challengesHasKind()) { payload.kind = obj.kind || 'choice'; payload.body = obj.body || ''; }
   let res;
   if (existingId) {
     res = await sbFetch(`/rest/v1/challenges?id=eq.${existingId}`, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(payload) });
@@ -955,6 +968,7 @@ function paintQs() {
 async function doPublish() {
   const st = editState;
   if (!st.title.trim()) return toast('填个标题');
+  if (st.kind === 'recite' && !(await challengesHasKind())) return toast('背诵题需先在 Supabase 建 kind/body 列（见 supabase-challenges-2.sql）');
   let clean;
   if (st.kind === 'recite') {
     clean = { kind: 'recite', title: st.title.trim(), intro: st.intro.trim(), body: (st.body || '').trim(), questions: [] };
@@ -978,10 +992,20 @@ async function doPublish() {
     renderChallengeDetail((saved && saved.id) || st.id);
   } catch (e) { toast(e.message); $('#pubBtn').disabled = false; }
 }
+function shuffledQuestions(src) {
+  // 每次进入：题目乱序 + 每题选项也乱序（答案索引随之重映射）
+  const qs = src.map(q => {
+    const idx = q.options.map((_, i) => i);
+    shuffleArr(idx);
+    return { q: q.q, options: idx.map(i => q.options[i]), answer: idx.indexOf(q.answer) };
+  });
+  shuffleArr(qs);
+  return qs;
+}
 function renderChallengePlay(c) {
   view = 'chalPlay'; stopAll(); $('#playbar').style.display = 'none';
   setHeader(c.title, () => renderChallengeDetail(c.id));
-  chal = { c, qs: c.questions, pos: 0, results: [], startedAt: Date.now(), timer: null, answered: false };
+  chal = { c, qs: shuffledQuestions(c.questions), pos: 0, results: [], startedAt: Date.now(), timer: null, answered: false };
   main.innerHTML = `
     <div class="card">
       <div class="hint" style="text-align:left"><span id="chalProgTxt"></span> · ⏱ <span id="chalTimer">0:00</span></div>
