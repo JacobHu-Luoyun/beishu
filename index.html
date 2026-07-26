@@ -277,8 +277,10 @@ async function renderHome() {
     row.className = 'sent';
     row.innerHTML = `<span class="txt"></span><span class="mark"></span>`;
     row.querySelector('.txt').textContent = p.name;
+    const passed = evalPass(p).ok;
     row.querySelector('.mark').textContent = atts.length
-      ? `${atts.length} 次 · 最近 ${fmtSecs(atts[atts.length - 1].secs)}` : '未测';
+      ? (passed ? '✅ 已过关' : `${atts.length} 次 · 最近 ${fmtSecs(atts[atts.length - 1].secs)}`) : '未测';
+    if (passed) row.querySelector('.mark').classList.add('selmark');
     row.onclick = () => renderProject(p.id);
     pc.appendChild(row);
   }
@@ -452,6 +454,97 @@ function refreshMarks() {
 
 /* ---------- 背诵实测（自由录制计时） ---------- */
 let prjRec = null, prjTimer = null;
+// 过关判定：最近 N 次平均达标 且 波动在容差内
+function evalPass(p) {
+  const atts = p.attempts || [];
+  const N = p.passStreak || 5, T = p.targetSecs;
+  if (!T) return { ok: false, ready: false, progress: 0, N };
+  // “达标进度”：从最近往前数，连续处于目标±容差内的次数
+  const tol = T * (p.tolPct != null ? p.tolPct : 15) / 100;
+  let progress = 0;
+  for (let i = atts.length - 1; i >= 0; i--) {
+    if (Math.abs(atts[i].secs - T) <= tol) progress++; else break;
+  }
+  if (atts.length < N) return { ok: false, ready: false, progress: Math.min(progress, N), N };
+  const last = atts.slice(-N).map(a => a.secs);
+  const avg = last.reduce((s, x) => s + x, 0) / N;
+  const spread = Math.max(...last) - Math.min(...last);
+  const ok = avg <= T && spread <= tol * 2; // 平均达标 且 极差不超过 ±容差带宽
+  return { ok, ready: true, progress: Math.min(progress, N), N, avg: Math.round(avg), spread: Math.round(spread), tol: Math.round(tol) };
+}
+// 折线图：SVG 绘制，支持横向缩放/滑动
+const chartState = { zoom: 1, scroll: 0 };
+function drawChart(container, p) {
+  const atts = p.attempts || [];
+  if (atts.length < 2) { container.innerHTML = '<div class="hint">至少 2 次实测后显示趋势图。</div>'; return; }
+  const T = p.targetSecs, tol = T ? T * (p.tolPct != null ? p.tolPct : 15) / 100 : 0;
+  const secs = atts.map(a => a.secs);
+  const best = Math.min(...secs);
+  const maxV = Math.max(...secs, T ? T + tol : 0) * 1.1;
+  const minV = 0;
+  const H = 200, padL = 40, padB = 24, padT = 10;
+  const plotH = H - padB - padT;
+  const stepBase = 46; // 每点基础像素间距
+  const step = stepBase * chartState.zoom;
+  const plotW = Math.max((atts.length - 1) * step, 10);
+  const W = padL + plotW + 16;
+  const y = v => padT + plotH * (1 - (v - minV) / (maxV - minV));
+  const x = i => padL + i * step;
+  const svgparts = [];
+  // 目标带 + 目标线 + 最佳线
+  if (T) {
+    svgparts.push(`<rect x="${padL}" y="${y(T + tol).toFixed(1)}" width="${plotW + 16}" height="${(y(T - tol) - y(T + tol)).toFixed(1)}" fill="var(--ok)" opacity="0.10"/>`);
+    svgparts.push(`<line x1="${padL}" y1="${y(T).toFixed(1)}" x2="${W}" y2="${y(T).toFixed(1)}" stroke="var(--ok)" stroke-dasharray="5 4" stroke-width="1.5"/>`);
+    svgparts.push(`<text x="${padL + 2}" y="${(y(T) - 4).toFixed(1)}" font-size="11" fill="var(--ok)">目标 ${T}s</text>`);
+  }
+  svgparts.push(`<line x1="${padL}" y1="${y(best).toFixed(1)}" x2="${W}" y2="${y(best).toFixed(1)}" stroke="var(--accent)" stroke-dasharray="2 3" stroke-width="1" opacity="0.6"/>`);
+  // 折线
+  const pts = atts.map((a, i) => `${x(i).toFixed(1)},${y(a.secs).toFixed(1)}`).join(' ');
+  svgparts.push(`<polyline points="${pts}" fill="none" stroke="var(--muted)" stroke-width="1.5"/>`);
+  // 点
+  atts.forEach((a, i) => {
+    const hit = T && Math.abs(a.secs - T) <= tol;
+    const c = hit ? 'var(--ok)' : (a.secs === best ? 'var(--accent)' : 'var(--muted)');
+    svgparts.push(`<circle class="cpt" data-i="${i}" cx="${x(i).toFixed(1)}" cy="${y(a.secs).toFixed(1)}" r="5" fill="${c}" style="cursor:pointer"/>`);
+    if (atts.length <= 20 || chartState.zoom > 1.5)
+      svgparts.push(`<text x="${x(i).toFixed(1)}" y="${(y(a.secs) - 9).toFixed(1)}" font-size="10" fill="var(--ink)" text-anchor="middle">${a.secs}</text>`);
+  });
+  // Y 轴刻度
+  for (let g = 0; g <= 4; g++) {
+    const v = Math.round(maxV * g / 4);
+    svgparts.push(`<text x="4" y="${(y(v) + 3).toFixed(1)}" font-size="10" fill="var(--muted)">${v}</text>`);
+  }
+  // X 轴次序（每隔几个标一次）
+  const xstep = Math.ceil(atts.length / (plotW / 30));
+  atts.forEach((a, i) => {
+    if (i % xstep === 0 || i === atts.length - 1)
+      svgparts.push(`<text x="${x(i).toFixed(1)}" y="${H - 6}" font-size="10" fill="var(--muted)" text-anchor="middle">${i + 1}</text>`);
+  });
+  container.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <span class="hint">用时趋势（点圆点回放那次）</span>
+      <span>
+        <button class="ghost" id="czOut" style="padding:2px 10px;font-size:15px">－</button>
+        <button class="ghost" id="czIn" style="padding:2px 10px;font-size:15px">＋</button>
+      </span>
+    </div>
+    <div id="chartScroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <svg width="${W}" height="${H}" style="display:block">${svgparts.join('')}</svg>
+    </div>`;
+  const scroller = container.querySelector('#chartScroll');
+  scroller.scrollLeft = chartState.scroll;
+  scroller.onscroll = () => { chartState.scroll = scroller.scrollLeft; };
+  container.querySelector('#czIn').onclick = () => { chartState.zoom = Math.min(4, chartState.zoom * 1.4); drawChart(container, p); };
+  container.querySelector('#czOut').onclick = () => { chartState.zoom = Math.max(0.4, chartState.zoom / 1.4); drawChart(container, p); };
+  container.querySelectorAll('.cpt').forEach(c => {
+    c.onclick = async () => {
+      const a = atts[+c.dataset.i];
+      const rec = await getAudio(`prj:${p.id}:${a.id}`);
+      toast(`第 ${+c.dataset.i + 1} 次 · ${fmtDate(a.at)} · ${fmtSecs(a.secs)}`);
+      if (rec) playBlob(rec.blob);
+    };
+  });
+}
 async function renderProjectEdit(existing) {
   view = 'prjEdit'; stopAll(); $('#playbar').style.display = 'none';
   setHeader(existing ? '编辑项目' : '新建实测项目', () => existing ? renderProject(existing.id) : renderHome());
@@ -461,6 +554,12 @@ async function renderProjectEdit(existing) {
     <input type="text" id="prjName" placeholder="如：滕王阁序·全篇实测">
     <label>关联篇目（可选，实测时可以看一眼原文）</label>
     <select id="prjText" style="width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:16px;font-family:inherit"></select>
+    <label>目标用时（秒）<span class="hint" id="prjSug"></span></label>
+    <input type="text" id="prjTarget" inputmode="numeric" placeholder="如 50">
+    <div style="display:flex;gap:12px">
+      <div style="flex:1"><label>连续几次达标算过关</label><input type="text" id="prjStreak" inputmode="numeric" placeholder="5"></div>
+      <div style="flex:1"><label>波动容差（±%）</label><input type="text" id="prjTol" inputmode="numeric" placeholder="15"></div>
+    </div>
     <div style="margin-top:14px"><button class="primary" id="prjSave">保存</button></div>`;
   const sel = $('#prjText');
   const none = document.createElement('option');
@@ -471,12 +570,31 @@ async function renderProjectEdit(existing) {
     o.value = t.id; o.textContent = t.title;
     sel.appendChild(o);
   }
-  if (existing) { $('#prjName').value = existing.name; sel.value = existing.textId || ''; }
+  // 目标建议：按最佳成绩 ×1.15 向上取整
+  const atts = existing && existing.attempts || [];
+  if (atts.length) {
+    const best = Math.min(...atts.map(a => a.secs));
+    $('#prjSug').textContent = ` 建议 ${Math.ceil(best * 1.15)}（最佳 ${best}s）`;
+  }
+  if (existing) {
+    $('#prjName').value = existing.name;
+    sel.value = existing.textId || '';
+    if (existing.targetSecs) $('#prjTarget').value = existing.targetSecs;
+    if (existing.passStreak) $('#prjStreak').value = existing.passStreak;
+    if (existing.tolPct != null) $('#prjTol').value = existing.tolPct;
+  }
   $('#prjSave').onclick = async () => {
     const name = $('#prjName').value.trim();
     if (!name) return toast('项目名称要填');
     const p = existing || { id: 'p' + Date.now().toString(36), created: Date.now(), attempts: [] };
-    p.name = name; p.textId = sel.value || null; p.updated = Date.now();
+    p.name = name; p.textId = sel.value || null;
+    const tgt = parseInt($('#prjTarget').value, 10);
+    const stk = parseInt($('#prjStreak').value, 10);
+    const tol = parseInt($('#prjTol').value, 10);
+    p.targetSecs = tgt > 0 ? tgt : null;
+    p.passStreak = stk > 0 ? stk : 5;
+    p.tolPct = tol >= 0 ? tol : 15;
+    p.updated = Date.now();
     await putProject(p);
     toast('已保存');
     renderProject(p.id);
@@ -491,6 +609,8 @@ async function renderProject(id) {
   setHeader(p.name, renderHome, { label: '编辑', fn: () => renderProjectEdit(p) });
   const atts = p.attempts || [];
   const best = atts.length ? Math.min(...atts.map(a => a.secs)) : null;
+  const pass = evalPass(p);
+  chartState.zoom = 1; chartState.scroll = 1e9; // 默认停在最右（最新）
   main.innerHTML = `
     <div class="card" style="text-align:center">
       <div class="hint">${atts.length ? `已测 ${atts.length} 次 · 最佳 ${fmtSecs(best)} · 最近 ${fmtSecs(atts[atts.length - 1].secs)}` : '还没有实测记录'}</div>
@@ -502,7 +622,12 @@ async function renderProject(id) {
       ${linked ? '<button class="ghost" id="peekBtn" style="margin-top:8px">👀 看一眼原文</button>' : ''}
     </div>
     <div class="card" id="peekCard" style="display:none;line-height:2"></div>
-    ${atts.length > 1 ? `<div class="hint" style="text-align:left;margin-bottom:8px">⏱ ${atts.slice(-6).map(a => fmtSecs(a.secs)).join(' → ')}</div>` : ''}
+    ${p.targetSecs ? `<div class="card" style="${pass.ok ? 'border-color:var(--ok)' : ''}">
+      ${pass.ok
+        ? `<div style="color:var(--ok);font-weight:600">✅ 已过关！最近 ${pass.N} 次平均 ${pass.avg}s（目标 ${p.targetSecs}s），波动 ${pass.spread}s 内。</div>`
+        : `<div class="hint" style="text-align:left">🎯 目标 ${p.targetSecs}s · 连续 ${pass.N} 次达标过关。当前达标进度 <b>${pass.progress}/${pass.N}</b>${pass.ready ? `（最近 ${pass.N} 次平均 ${pass.avg}s、波动 ${pass.spread}s，容差 ±${pass.tol}s）` : '（次数还不够）'}</div>`}
+    </div>` : `<div class="card"><div class="hint" style="text-align:left">还没设目标。点右上角「编辑」设定目标用时，就能追踪过关进度。</div></div>`}
+    <div class="card" id="chartCard"></div>
     <div id="attList"></div>
     <button class="ghost danger" id="prjDel" style="margin:8px 0;font-size:13px;padding:4px 10px">删除项目</button>`;
   if (linked) {
@@ -512,6 +637,7 @@ async function renderProject(id) {
       c.style.display = c.style.display === 'none' ? '' : 'none';
     };
   }
+  drawChart($('#chartCard'), p);
   const list = $('#attList');
   [...atts].reverse().forEach((a, ri) => {
     const k = atts.length - 1 - ri;
