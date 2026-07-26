@@ -1457,9 +1457,11 @@ function renderQuiz(indices, reviewCardId) {
         <button class="ghost" id="quizRight" style="color:var(--ok);border-color:var(--ok)">✓ 记得</button>
         <button class="ghost danger" id="quizWrong">✗ 忘了</button>
       </div>
+      <div id="quizOpts" style="display:none;width:100%"></div>
       <div class="switch">题型 <select id="quizMode">
         <option value="listen">听写：放自己的录音，默出原文</option>
         <option value="chain">接句：看上句，背出下一句</option>
+        <option value="choice">选择题：看上句，从选项里选下一句</option>
       </select></div>
       <div class="switch"><input type="checkbox" id="quizShuffle"><label for="quizShuffle" style="margin:0">乱序出题</label></div>
       <div class="switch"><input type="checkbox" id="quizTyping"><label for="quizTyping" style="margin:0">打字默写（逐字比对）</label></div>
@@ -1513,6 +1515,13 @@ function judgeQuiz(ok) {
   quiz.pos++;
   showQuizCard();
 }
+function genChoices(i) { // 4 选 1：正确句 + 3 个同篇干扰句
+  const pool = curText.sentences.map((_, k) => k).filter(k => k !== i);
+  shuffleArr(pool);
+  const idxs = [i, ...pool.slice(0, 3)];
+  shuffleArr(idxs);
+  return idxs.map(k => ({ idx: k, text: curText.sentences[k] }));
+}
 function showQuizCard() {
   const total = quiz.order.length;
   if (quiz.pos >= total) return showQuizEnd();
@@ -1521,11 +1530,46 @@ function showQuizCard() {
   $('#quizProgTxt').textContent = `第 ${quiz.pos + 1} / ${total} 题 · 对 ${vals.filter(v => v).length} · 错 ${vals.filter(v => !v).length}`;
   $('#quizAnswer').style.display = 'none';
   $('#quizHintTxt').textContent = '';
-  $('#quizType').style.display = quizPrefs.typing ? '' : 'none';
   $('#quizType').value = '';
   $('#quizJudge').style.display = 'none';
-  $('#quizReveal').style.display = '';
   const has = curText.recorded && curText.recorded[i];
+  if (quiz.mode === 'choice') {
+    // 选择题：隐藏默写相关控件，显示选项
+    $('#quizType').style.display = 'none';
+    $('#quizReveal').style.display = 'none';
+    $('#quizPlay').style.display = 'none';
+    $('#quizHint').parentElement.style.display = 'none';
+    $('#quizPrompt').textContent = i === 0 ? '本篇开头是哪一句？' : '接上句「' + curText.sentences[i - 1] + '」，下一句是？';
+    const box = $('#quizOpts');
+    box.style.display = '';
+    box.innerHTML = '';
+    quiz.answered = false;
+    const opts = genChoices(i);
+    opts.forEach(o => {
+      const b = document.createElement('button');
+      b.className = 'ghost';
+      b.style.cssText = 'width:100%;text-align:left;margin-bottom:8px;line-height:1.5';
+      b.textContent = o.text;
+      b.onclick = () => {
+        if (quiz.answered) return;
+        quiz.answered = true;
+        const ok = o.text === curText.sentences[i];
+        [...box.children].forEach(btn => {
+          btn.disabled = true;
+          if (btn.textContent === curText.sentences[i]) { btn.style.borderColor = 'var(--ok)'; btn.style.color = 'var(--ok)'; }
+        });
+        if (!ok) { b.style.borderColor = 'var(--rec)'; b.style.color = 'var(--rec)'; }
+        setTimeout(() => judgeQuiz(ok), 750);
+      };
+      box.appendChild(b);
+    });
+    return;
+  }
+  // 听写 / 接句（自评）
+  $('#quizOpts').style.display = 'none';
+  $('#quizHint').parentElement.style.display = '';
+  $('#quizType').style.display = quizPrefs.typing ? '' : 'none';
+  $('#quizReveal').style.display = '';
   if (quiz.mode === 'listen') {
     $('#quizPrompt').textContent = has
       ? '🔊 点「放录音」，听后默出这一句'
