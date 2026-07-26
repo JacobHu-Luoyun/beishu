@@ -150,6 +150,105 @@
 <div id="toast"></div>
 
 <script>
+/* ---------- 云端配置（填你的 Supabase 项目） ---------- */
+const CONFIG = {
+  SUPABASE_URL: '',   // 如 https://xxxx.supabase.co
+  SUPABASE_ANON: ''   // Project Settings → API → anon public key
+};
+const cloudReady = () => !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON);
+
+/* ---------- 云端账号 / 成绩 / 排行榜 ---------- */
+const AUTH_KEY = 'beishu_auth';
+let auth = null;
+try { auth = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); } catch (e) {}
+function saveAuth(a) { auth = a; localStorage.setItem(AUTH_KEY, JSON.stringify(a)); }
+function clearAuth() { auth = null; localStorage.removeItem(AUTH_KEY); }
+const loggedIn = () => !!(auth && auth.access_token);
+
+async function sbFetch(path, opts = {}, retry = true) {
+  const headers = Object.assign({
+    apikey: CONFIG.SUPABASE_ANON,
+    Authorization: 'Bearer ' + ((auth && auth.access_token) || CONFIG.SUPABASE_ANON),
+    'Content-Type': 'application/json'
+  }, opts.headers || {});
+  const res = await fetch(CONFIG.SUPABASE_URL + path, Object.assign({}, opts, { headers }));
+  if (res.status === 401 && retry && auth && auth.refresh_token) {
+    if (await refreshSession()) return sbFetch(path, opts, false);
+  }
+  return res;
+}
+async function refreshSession() {
+  try {
+    const res = await fetch(CONFIG.SUPABASE_URL + '/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST',
+      headers: { apikey: CONFIG.SUPABASE_ANON, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: auth.refresh_token })
+    });
+    if (!res.ok) { clearAuth(); return false; }
+    const d = await res.json();
+    saveAuth(Object.assign({}, auth, { access_token: d.access_token, refresh_token: d.refresh_token }));
+    return true;
+  } catch (e) { return false; }
+}
+async function sendOtp(email) {
+  const res = await fetch(CONFIG.SUPABASE_URL + '/auth/v1/otp', {
+    method: 'POST',
+    headers: { apikey: CONFIG.SUPABASE_ANON, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, create_user: true })
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).msg || '发送失败');
+}
+async function verifyOtp(email, token) {
+  const res = await fetch(CONFIG.SUPABASE_URL + '/auth/v1/verify', {
+    method: 'POST',
+    headers: { apikey: CONFIG.SUPABASE_ANON, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'email', email, token })
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok || !d.access_token) throw new Error(d.msg || d.error_description || '验证码错误');
+  saveAuth({ access_token: d.access_token, refresh_token: d.refresh_token, uid: d.user.id, email, nickname: '' });
+  const prof = await getMyProfile();
+  if (prof && prof.nickname) saveAuth(Object.assign({}, auth, { nickname: prof.nickname }));
+}
+async function getMyProfile() {
+  const res = await sbFetch(`/rest/v1/profiles?id=eq.${auth.uid}&select=nickname`);
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows[0] || null;
+}
+async function saveNickname(nickname) {
+  const res = await sbFetch('/rest/v1/profiles?on_conflict=id', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates' },
+    body: JSON.stringify({ id: auth.uid, nickname })
+  });
+  if (!res.ok) throw new Error('昵称保存失败');
+  saveAuth(Object.assign({}, auth, { nickname }));
+}
+async function uploadScore(piece, best, count, total) {
+  const res = await sbFetch('/rest/v1/scores?on_conflict=user_id,piece', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify({ user_id: auth.uid, piece, best_secs: best, count, total_secs: total, updated_at: new Date().toISOString() })
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || '上传失败');
+}
+async function deleteScore(piece) {
+  const res = await sbFetch(`/rest/v1/scores?user_id=eq.${auth.uid}&piece=eq.${encodeURIComponent(piece)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('撤下失败');
+}
+async function myScore(piece) {
+  const res = await sbFetch(`/rest/v1/scores?user_id=eq.${auth.uid}&piece=eq.${encodeURIComponent(piece)}&select=best_secs,count,total_secs`);
+  if (!res.ok) return null;
+  return (await res.json())[0] || null;
+}
+async function fetchBoard(piece, orderCol) {
+  const asc = orderCol === 'best_secs';
+  const res = await sbFetch(`/rest/v1/scores?piece=eq.${encodeURIComponent(piece)}&select=user_id,best_secs,count,total_secs,profiles(nickname)&order=${orderCol}.${asc ? 'asc' : 'desc'}&limit=100`);
+  if (!res.ok) throw new Error('榜单加载失败');
+  return await res.json();
+}
+
 /* ---------- IndexedDB ---------- */
 const DB_NAME = 'beishu', DB_VER = 2;
 let db;
@@ -266,6 +365,23 @@ async function renderHome() {
   setHeader('背书', null, { label: '＋ 新建', fn: () => renderEdit(null) });
   const texts = (await getAllTexts()).sort((a, b) => b.updated - a.updated);
   main.innerHTML = '';
+  // 账号状态条
+  const ac = document.createElement('div');
+  ac.className = 'card';
+  ac.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 14px';
+  if (loggedIn()) {
+    ac.innerHTML = `<span style="flex:1">👤 ${auth.nickname || auth.email}</span>
+      <button class="ghost" id="editNick" style="padding:4px 12px;font-size:14px">改昵称</button>
+      <button class="ghost" id="logoutBtn" style="padding:4px 12px;font-size:14px">退出</button>`;
+    ac.querySelector('#editNick').onclick = () => renderNickname(renderHome);
+    ac.querySelector('#logoutBtn').onclick = () => { clearAuth(); toast('已退出'); renderHome(); };
+  } else {
+    ac.innerHTML = `<span class="hint" style="flex:1">登录后可上传最佳成绩、看排行榜</span>
+      <button class="ghost" id="loginEntry" style="padding:4px 14px;font-size:14px">登录</button>`;
+    ac.querySelector('#loginEntry').onclick = () => renderLogin(renderHome);
+  }
+  main.appendChild(ac);
+
   const projects = (await getAllProjects()).sort((a, b) => b.updated - a.updated);
   const pc = document.createElement('div');
   pc.className = 'card';
@@ -452,6 +568,155 @@ function refreshMarks() {
   });
 }
 
+/* ---------- 项目云端卡片（上传/榜单） ---------- */
+async function renderCloudCard(p, best) {
+  const card = $('#cloudCard');
+  if (!card) return;
+  const atts = p.attempts || [];
+  if (!cloudReady()) {
+    card.innerHTML = `<div class="hint" style="text-align:left">🏆 排行榜未启用：代码里填好 Supabase 配置即可上传成绩、和大家比。</div>`;
+    return;
+  }
+  if (!loggedIn()) {
+    card.innerHTML = `<div style="display:flex;align-items:center;gap:10px"><span class="hint" style="flex:1">登录后可上传最佳成绩、看排行榜</span><button class="ghost" id="cloudLogin" style="padding:4px 14px;font-size:14px">登录</button></div>`;
+    card.querySelector('#cloudLogin').onclick = () => renderLogin(() => renderProject(p.id));
+    return;
+  }
+  const total = atts.reduce((s, a) => s + a.secs, 0);
+  card.innerHTML = `
+    <div class="hint" style="text-align:left;margin-bottom:8px">🏆 排行榜（篇目：<b>${p.name}</b>）</div>
+    <div class="rec-nav">
+      <button class="primary" id="upBtn" ${atts.length ? '' : 'disabled'} style="flex:2">⬆ 上传我的最佳成绩</button>
+      <button class="ghost" id="boardBtn" style="flex:1">看榜</button>
+    </div>
+    <div class="hint" id="cloudMsg" style="text-align:left;margin-top:8px"></div>`;
+  const msg = $('#cloudMsg');
+  myScore(p.name).then(ms => {
+    if (ms) msg.innerHTML = `已上传：最佳 ${fmtSecs(ms.best_secs)} · 背 ${ms.count} 次 · 累积 ${fmtSecs(ms.total_secs)}　<a href="#" id="downBtn" style="color:var(--rec)">撤下</a>`;
+    const db = $('#downBtn');
+    if (db) db.onclick = async (e) => {
+      e.preventDefault();
+      if (!confirm('把你在这篇的成绩从排行榜撤下？')) return;
+      try { await deleteScore(p.name); toast('已撤下'); renderProject(p.id); }
+      catch (er) { toast(er.message); }
+    };
+  });
+  $('#upBtn').onclick = async () => {
+    $('#upBtn').disabled = true; msg.textContent = '上传中…';
+    try {
+      await saveNickname(auth.nickname || '匿名'); // 确保 profile 存在
+      await uploadScore(p.name, best, atts.length, total);
+      toast('已上传，去看榜！');
+      renderProject(p.id);
+    } catch (e) { msg.textContent = '上传失败：' + e.message; $('#upBtn').disabled = false; }
+  };
+  $('#boardBtn').onclick = () => renderBoard(p.name, p.id);
+}
+function renderBoard(piece, backPid) {
+  view = 'board'; stopAll(); $('#playbar').style.display = 'none';
+  setHeader('排行榜', () => renderProject(backPid));
+  main.innerHTML = `
+    <div class="toolbar">
+      <button class="ghost on" id="tabBest">⚡ 最快</button>
+      <button class="ghost" id="tabCount">🔥 次数</button>
+      <button class="ghost" id="tabTotal">⏳ 累积</button>
+    </div>
+    <div class="hint" style="text-align:left;margin-bottom:8px">篇目：<b>${piece}</b>（同名篇目一起比）</div>
+    <div id="boardList"><div class="hint">加载中…</div></div>`;
+  const cols = { best: ['best_secs', 'tabBest'], count: ['count', 'tabCount'], total: ['total_secs', 'tabTotal'] };
+  async function load(kind) {
+    ['tabBest', 'tabCount', 'tabTotal'].forEach(id => $('#' + id).classList.toggle('on', id === cols[kind][1]));
+    const list = $('#boardList');
+    list.innerHTML = '<div class="hint">加载中…</div>';
+    try {
+      const rows = await fetchBoard(piece, cols[kind][0]);
+      if (!rows.length) { list.innerHTML = '<div class="hint">还没有人上传这篇的成绩，来当第一个！</div>'; return; }
+      list.innerHTML = '';
+      rows.forEach((r, i) => {
+        const mine = loggedIn() && r.user_id === auth.uid;
+        const val = kind === 'best' ? fmtSecs(r.best_secs) : kind === 'count' ? r.count + ' 次' : fmtSecs(r.total_secs);
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
+        const el = document.createElement('div');
+        el.className = 'sent';
+        el.style.cursor = 'default';
+        if (mine) el.style.background = 'var(--accent-soft)';
+        el.innerHTML = `<span class="idx">${medal}</span><span class="txt"></span><span class="mark">${val}</span>`;
+        el.querySelector('.txt').textContent = (r.profiles && r.profiles.nickname) || '匿名' + (mine ? '（我）' : '');
+        list.appendChild(el);
+      });
+    } catch (e) { list.innerHTML = `<div class="hint">${e.message}</div>`; }
+  }
+  $('#tabBest').onclick = () => load('best');
+  $('#tabCount').onclick = () => load('count');
+  $('#tabTotal').onclick = () => load('total');
+  load('best');
+}
+
+/* ---------- 账号登录 ---------- */
+function renderLogin(after) {
+  view = 'login'; stopAll(); $('#playbar').style.display = 'none';
+  const back = after || renderHome;
+  setHeader('登录', back);
+  if (!cloudReady()) {
+    main.innerHTML = `<div class="card"><p>云端还没配置。</p><p class="hint">需要先在代码 <code>CONFIG</code> 里填入 Supabase 的 URL 和 anon key（我给你的部署说明里有步骤），账号和排行榜才能用。本地背诵功能不受影响。</p></div>`;
+    return;
+  }
+  main.innerHTML = `
+    <div class="card">
+      <p class="hint" style="text-align:left">邮箱验证码登录，不用记密码；换设备用同一邮箱登录即同一账号。登录只为上排行榜，录音不会上传。</p>
+      <label>邮箱</label>
+      <input type="text" id="emailIn" inputmode="email" placeholder="you@example.com" autocomplete="email">
+      <div id="codeWrap" style="display:none">
+        <label>验证码（查收邮件，6 位）</label>
+        <input type="text" id="codeIn" inputmode="numeric" placeholder="6 位验证码">
+      </div>
+      <div style="margin-top:14px"><button class="primary" id="loginBtn">发送验证码</button></div>
+      <div class="hint" id="loginMsg" style="margin-top:8px"></div>
+    </div>`;
+  let stage = 'email';
+  $('#loginBtn').onclick = async () => {
+    const email = $('#emailIn').value.trim();
+    const msg = $('#loginMsg');
+    if (!email || !email.includes('@')) return toast('填个有效邮箱');
+    if (stage === 'email') {
+      $('#loginBtn').disabled = true; msg.textContent = '发送中…';
+      try {
+        await sendOtp(email);
+        stage = 'code';
+        $('#codeWrap').style.display = '';
+        $('#loginBtn').textContent = '登录';
+        msg.textContent = '验证码已发到邮箱，可能在垃圾箱。';
+      } catch (e) { msg.textContent = '发送失败：' + e.message; }
+      $('#loginBtn').disabled = false;
+      return;
+    }
+    const code = $('#codeIn').value.trim();
+    if (!code) return toast('填验证码');
+    $('#loginBtn').disabled = true; msg.textContent = '验证中…';
+    try {
+      await verifyOtp(email, code);
+      if (!auth.nickname) return renderNickname(back);
+      toast('已登录'); back();
+    } catch (e) { msg.textContent = e.message; $('#loginBtn').disabled = false; }
+  };
+}
+function renderNickname(after) {
+  view = 'nickname'; setHeader('设置昵称', null);
+  main.innerHTML = `
+    <div class="card">
+      <p class="hint" style="text-align:left">起个昵称，排行榜上显示这个名字（以后可改）。</p>
+      <input type="text" id="nickIn" placeholder="如：洛云" maxlength="16">
+      <div style="margin-top:14px"><button class="primary" id="nickBtn">完成</button></div>
+    </div>`;
+  $('#nickBtn').onclick = async () => {
+    const nk = $('#nickIn').value.trim();
+    if (!nk) return toast('填个昵称');
+    $('#nickBtn').disabled = true;
+    try { await saveNickname(nk); toast('欢迎，' + nk); (after || renderHome)(); }
+    catch (e) { toast(e.message); $('#nickBtn').disabled = false; }
+  };
+}
+
 /* ---------- 背诵实测（自由录制计时） ---------- */
 let prjRec = null, prjTimer = null;
 // 过关判定：最近 N 次平均达标 且 波动在容差内
@@ -628,6 +893,7 @@ async function renderProject(id) {
         : `<div class="hint" style="text-align:left">🎯 目标 ${p.targetSecs}s · 连续 ${pass.N} 次达标过关。当前达标进度 <b>${pass.progress}/${pass.N}</b>${pass.ready ? `（最近 ${pass.N} 次平均 ${pass.avg}s、波动 ${pass.spread}s，容差 ±${pass.tol}s）` : '（次数还不够）'}</div>`}
     </div>` : `<div class="card"><div class="hint" style="text-align:left">还没设目标。点右上角「编辑」设定目标用时，就能追踪过关进度。</div></div>`}
     <div class="card" id="chartCard"></div>
+    <div class="card" id="cloudCard"></div>
     <div id="attList"></div>
     <button class="ghost danger" id="prjDel" style="margin:8px 0;font-size:13px;padding:4px 10px">删除项目</button>`;
   if (linked) {
@@ -638,6 +904,7 @@ async function renderProject(id) {
     };
   }
   drawChart($('#chartCard'), p);
+  renderCloudCard(p, best);
   const list = $('#attList');
   [...atts].reverse().forEach((a, ri) => {
     const k = atts.length - 1 - ri;
