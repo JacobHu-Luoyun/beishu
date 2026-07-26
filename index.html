@@ -190,6 +190,17 @@ async function refreshSession() {
     return true;
   } catch (e) { return false; }
 }
+async function signInAnon(nickname) {
+  const res = await fetch(CONFIG.SUPABASE_URL + '/auth/v1/signup', {
+    method: 'POST',
+    headers: { apikey: CONFIG.SUPABASE_ANON, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: { nickname } })
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok || !d.access_token) throw new Error(d.msg || d.error_description || d.error_code || '登录失败');
+  saveAuth({ access_token: d.access_token, refresh_token: d.refresh_token, uid: d.user.id, email: '', nickname });
+  await saveNickname(nickname);
+}
 async function sendOtp(email) {
   const res = await fetch(CONFIG.SUPABASE_URL + '/auth/v1/otp', {
     method: 'POST',
@@ -663,41 +674,26 @@ function renderLogin(after) {
   }
   main.innerHTML = `
     <div class="card">
-      <p class="hint" style="text-align:left">邮箱验证码登录，不用记密码；换设备用同一邮箱登录即同一账号。登录只为上排行榜，录音不会上传。</p>
-      <label>邮箱</label>
-      <input type="text" id="emailIn" inputmode="email" placeholder="you@example.com" autocomplete="email">
-      <div id="codeWrap" style="display:none">
-        <label>验证码（查收邮件，6 位）</label>
-        <input type="text" id="codeIn" inputmode="numeric" placeholder="6 位验证码">
-      </div>
-      <div style="margin-top:14px"><button class="primary" id="loginBtn">发送验证码</button></div>
+      <p class="hint" style="text-align:left">起个昵称就能上排行榜、和大家比成绩。录音不会上传，只上传你手动上传的成绩。</p>
+      <label>昵称</label>
+      <input type="text" id="nickIn" placeholder="如：洛云" maxlength="16" autocomplete="off">
+      <div style="margin-top:14px"><button class="primary" id="loginBtn">进入</button></div>
       <div class="hint" id="loginMsg" style="margin-top:8px"></div>
+      <div class="hint" style="margin-top:10px;font-size:12px">账号保存在本机；换设备或清缓存会变新账号（以后可升级为绑定邮箱）。</div>
     </div>`;
-  let stage = 'email';
   $('#loginBtn').onclick = async () => {
-    const email = $('#emailIn').value.trim();
+    const nk = $('#nickIn').value.trim();
     const msg = $('#loginMsg');
-    if (!email || !email.includes('@')) return toast('填个有效邮箱');
-    if (stage === 'email') {
-      $('#loginBtn').disabled = true; msg.textContent = '发送中…';
-      try {
-        await sendOtp(email);
-        stage = 'code';
-        $('#codeWrap').style.display = '';
-        $('#loginBtn').textContent = '登录';
-        msg.textContent = '验证码已发到邮箱，可能在垃圾箱。';
-      } catch (e) { msg.textContent = '发送失败：' + e.message; }
-      $('#loginBtn').disabled = false;
-      return;
-    }
-    const code = $('#codeIn').value.trim();
-    if (!code) return toast('填验证码');
-    $('#loginBtn').disabled = true; msg.textContent = '验证中…';
+    if (!nk) return toast('填个昵称');
+    $('#loginBtn').disabled = true; msg.textContent = '登录中…';
     try {
-      await verifyOtp(email, code);
-      if (!auth.nickname) return renderNickname(back);
-      toast('已登录'); back();
-    } catch (e) { msg.textContent = e.message; $('#loginBtn').disabled = false; }
+      await signInAnon(nk);
+      toast('欢迎，' + nk);
+      back();
+    } catch (e) {
+      msg.textContent = '登录失败：' + e.message + (e.message.includes('disabled') || e.message.includes('Anonymous') ? '（请在 Supabase 后台开启 Anonymous sign-ins）' : '');
+      $('#loginBtn').disabled = false;
+    }
   };
 }
 function renderNickname(after) {
